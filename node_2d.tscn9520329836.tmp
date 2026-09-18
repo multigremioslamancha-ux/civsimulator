@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://be6yo7328spmo"]
+
+[ext_resource type="Script" uid="uid://cux7ancuegmjc" path="res://node_2d.gd" id="1_wtcfe"]
+
+[node name="SimuladorCiv" type="Node2D" unique_id=394779259]
+script = ExtResource("1_wtcfe")
