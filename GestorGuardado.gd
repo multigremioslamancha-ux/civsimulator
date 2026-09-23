@@ -1,5 +1,4 @@
 extends Node
-class_name GestorGuardado
 
 func guardar_partida(nombre: String, era: String, civ: String, asentamientos: Array, partidas_guardadas: Dictionary):
 	var datos_serializados = []

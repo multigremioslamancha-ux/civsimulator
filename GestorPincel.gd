@@ -1,7 +1,6 @@
 extends Node
-class_name GestorPincel
 
-static func celda_tiene_desarrollo(datos: Dictionary) -> bool:
+func celda_tiene_desarrollo(datos: Dictionary) -> bool:
 	if datos.get("mejora_tipo", "") != "":
 		return true
 	for e in datos.get("edificios", []):
@@ -11,7 +10,7 @@ static func celda_tiene_desarrollo(datos: Dictionary) -> bool:
 			return true
 	return false
 
-static func aplicar_bioma_y_terreno(main: Node2D, bioma: String, terreno: String):
+func aplicar_bioma_y_terreno(main: Node2D, bioma: String, terreno: String):
 	if not main.city_grid.has(main.celda_seleccionada): return
 	var datos = main.city_grid[main.celda_seleccionada]
 	if celda_tiene_desarrollo(datos): return
@@ -27,7 +26,7 @@ static func aplicar_bioma_y_terreno(main: Node2D, bioma: String, terreno: String
 		
 	validar_y_refrescar_pincel(main)
 
-static func aplicar_caracteristica(main: Node2D, c: String):
+func aplicar_caracteristica(main: Node2D, c: String):
 	if not main.city_grid.has(main.celda_seleccionada): return
 	var datos = main.city_grid[main.celda_seleccionada]
 	if celda_tiene_desarrollo(datos): return
@@ -37,7 +36,7 @@ static func aplicar_caracteristica(main: Node2D, c: String):
 	datos.caracteristica = c
 	validar_y_refrescar_pincel(main)
 
-static func validar_y_refrescar_pincel(main: Node2D):
+func validar_y_refrescar_pincel(main: Node2D):
 	var datos = main.city_grid[main.celda_seleccionada]
 	
 	var nom_rec = datos.get("recurso", "")
@@ -57,7 +56,7 @@ static func validar_y_refrescar_pincel(main: Node2D):
 	main.guardar_partida_actual()
 	main.queue_redraw()
 
-static func marcar_favorita(main: Node2D, val: int):
+func marcar_favorita(main: Node2D, val: int):
 	if main.seccion_actual != "PINCEL": return
 	if not main.city_grid.has(main.celda_seleccionada): return
 	var datos = main.city_grid[main.celda_seleccionada]
@@ -70,7 +69,7 @@ static func marcar_favorita(main: Node2D, val: int):
 	main.guardar_partida_actual()
 	main.queue_redraw()
 
-static func aplicar_recurso(main: Node2D, recurso_nombre: String):
+func aplicar_recurso(main: Node2D, recurso_nombre: String):
 	if not main.city_grid.has(main.celda_seleccionada): return
 	var datos = main.city_grid[main.celda_seleccionada]
 	if celda_tiene_desarrollo(datos): return
@@ -89,7 +88,7 @@ static func aplicar_recurso(main: Node2D, recurso_nombre: String):
 	main.guardar_partida_actual()
 	main.queue_redraw()
 
-static func aplicar_maravilla_natural(main: Node2D, maravilla_nombre: String):
+func aplicar_maravilla_natural(main: Node2D, maravilla_nombre: String):
 	if not main.city_grid.has(main.celda_seleccionada): return
 	var datos = main.city_grid[main.celda_seleccionada]
 	if celda_tiene_desarrollo(datos): return
@@ -103,7 +102,7 @@ static func aplicar_maravilla_natural(main: Node2D, maravilla_nombre: String):
 	main.guardar_partida_actual()
 	main.queue_redraw()
 
-static func borrar_maravilla_natural(main: Node2D):
+func borrar_maravilla_natural(main: Node2D):
 	if not main.city_grid.has(main.celda_seleccionada): return
 	var datos = main.city_grid[main.celda_seleccionada]
 	datos.caracteristica = "NONE"
@@ -113,7 +112,7 @@ static func borrar_maravilla_natural(main: Node2D):
 	main.guardar_partida_actual()
 	main.queue_redraw()
 
-static func toggle_rio_celda(main: Node2D):
+func toggle_rio_celda(main: Node2D):
 	if not main.city_grid.has(main.celda_seleccionada): return
 	var datos = main.city_grid[main.celda_seleccionada]
 	if celda_tiene_desarrollo(datos): return

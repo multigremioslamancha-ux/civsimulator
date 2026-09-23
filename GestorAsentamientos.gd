@@ -1,7 +1,6 @@
 extends Node
-class_name GestorAsentamientos
 
-static func iniciar_nueva_partida(main: Node2D, era: String, civ: String):
+func iniciar_nueva_partida(main: Node2D, era: String, civ: String):
 	main.era_actual = era
 	main.civ_actual = civ
 	main.civ_sincretismo = "None"
@@ -21,7 +20,7 @@ static func iniciar_nueva_partida(main: Node2D, era: String, civ: String):
 	main.actualizar_botones_recursos_ui()
 	main.guardar_partida_actual()
 
-static func crear_asentamiento_inicial(main: Node2D, nombre: String, tipo: String, centro: Vector2i, es_capital: bool):
+func crear_asentamiento_inicial(main: Node2D, nombre: String, tipo: String, centro: Vector2i, es_capital: bool):
 	var grid = {}
 	var radio_inicial = 4
 	for q in range(-radio_inicial, radio_inicial + 1):
@@ -92,7 +91,7 @@ static func crear_asentamiento_inicial(main: Node2D, nombre: String, tipo: Strin
 	cambiar_asentamiento_activo(main, main.asentamientos.size() - 1)
 	main.guardar_partida_actual()
 
-static func cambiar_asentamiento_activo(main: Node2D, idx: int):
+func cambiar_asentamiento_activo(main: Node2D, idx: int):
 	if main.asentamientos.size() > 0 and main.asentamiento_activo_idx < main.asentamientos.size():
 		for c in main.asentamientos[main.asentamiento_activo_idx].grid.values():
 			if is_instance_valid(c.nodo_icono): c.nodo_icono.visible = false
@@ -121,11 +120,11 @@ static func cambiar_asentamiento_activo(main: Node2D, idx: int):
 	main.centrar_camara_en_activo()
 	main.queue_redraw()
 
-static func crear_nuevo_asentamiento(main: Node2D, tipo: String):
+func crear_nuevo_asentamiento(main: Node2D, tipo: String):
 	var nombre = "Town " + str(main.asentamientos.size()) if tipo == "Town" else "City " + str(main.asentamientos.size())
 	crear_asentamiento_inicial(main, nombre, tipo, Vector2i(0, 0), false)
 
-static func resetear_asentamiento(main: Node2D, idx: int):
+func resetear_asentamiento(main: Node2D, idx: int):
 	var asent = main.asentamientos[idx]
 	var es_capital = (asent.tipo == "Capital")
 	
@@ -157,7 +156,7 @@ static func resetear_asentamiento(main: Node2D, idx: int):
 		main.queue_redraw()
 	main.guardar_partida_actual()
 
-static func ejecutar_borrado_asentamiento(main: Node2D, idx: int):
+func ejecutar_borrado_asentamiento(main: Node2D, idx: int):
 	if idx >= 0 and idx < main.asentamientos.size():
 		main.asentamientos.remove_at(idx)
 		if main.asentamiento_activo_idx >= main.asentamientos.size():
@@ -165,7 +164,7 @@ static func ejecutar_borrado_asentamiento(main: Node2D, idx: int):
 		cambiar_asentamiento_activo(main, main.asentamiento_activo_idx)
 		main.guardar_partida_actual()
 
-static func cambiar_era(main: Node2D, nueva_era: String, nueva_civ: String, idx_nueva_capital: int, dorados_seleccionados: Array = []):
+func cambiar_era(main: Node2D, nueva_era: String, nueva_civ: String, idx_nueva_capital: int, dorados_seleccionados: Array = []):
 	main.era_actual = nueva_era
 	main.civ_actual = nueva_civ
 	main.civ_sincretismo = "None"

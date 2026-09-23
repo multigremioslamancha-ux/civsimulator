@@ -1,5 +1,7 @@
 extends Node2D
 
+var panel_estadisticas: MarginContainer
+var grid_estadisticas: GridContainer
 var lider_actual: String = "Augustus"
 var radio_hex: float = 48.0
 var asentamientos: Array = []
@@ -63,11 +65,11 @@ var contenedor_mejoras_externas: GridContainer
 var panel_asentamientos_ui: Control
 var contenedor_lista_asentamientos: VBoxContainer
 var lbl_era_actual: Label
-var lbl_civ_actual
+var lbl_civ_actual: Control
 var btn_avanzar_era: Button
 var btn_sincretismo: Button
 
-var puntos_tactiles = {}
+var puntos_tactiles: Dictionary = {}
 var distancia_pinch_inicial: float = 0.0
 var ultimo_pos_raton: Vector2 = Vector2.ZERO
 var arrastrando: bool = false
@@ -137,12 +139,10 @@ func _ready() -> void:
 	camera.zoom = Vector2(1.3, 1.3)
 	add_child(camera)
 	
-	# Ocultar botones de juego hasta entrar en una partida
-	_controlar_botones_navegacion(false)
+	_crear_panel_estadisticas()
 	
-	# Mostrar el menú de partidas directamente en el panel lateral de info
+	_controlar_botones_navegacion(false)
 	mostrar_pantalla_partidas_guardadas()
-
 
 # ==============================================================================
 # PUENTES DE DELEGACIÓN (LLAMADAS A LOS GESTORES)
@@ -182,7 +182,6 @@ func mostrar_dialogo_lideres_inicio(iniciar_nueva_partida_despues: bool = true):
 func crear_nuevo_asentamiento(tipo: String): GestorAsentamientos.crear_nuevo_asentamiento(self, tipo)
 func resetear_asentamiento(idx: int): GestorAsentamientos.resetear_asentamiento(self, idx)
 func cambiar_asentamiento_activo(idx: int): GestorAsentamientos.cambiar_asentamiento_activo(self, idx)
-
 
 # ==============================================================================
 # LÓGICA DE VISUALIZACIÓN Y CÁMARA
@@ -309,15 +308,27 @@ func calcular_adyacencia_palacio(coord_centro: Vector2i) -> Dictionary:
 		var n = coord_centro + vec
 		if city_grid.has(n):
 			var d_n = city_grid[n]
-			if _es_celda_urbana(n):
-				var tiene_maravilla = false
-				for e in d_n.edificios:
-					if Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false) or Constantes.MARAVILLAS_NATURALES.has(e):
-						tiene_maravilla = true
-						break
-				if not tiene_maravilla:
-					bonus["Science"] += 1
-					bonus["Culture"] += 1
+			if d_n.get("ajeno", false): continue
+			
+			var tiene_maravilla = false
+			var reg_count = 0
+			var is_full_tile = false
+			
+			for e in d_n.edificios:
+				if Constantes.MARAVILLAS_NATURALES.has(e) or Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false):
+					tiene_maravilla = true
+					break
+				
+				if not ReglasJuego.es_edificio_muralla(e):
+					reg_count += 1
+					if Constantes.DATOS_EDIFICIOS.get(e, {}).get("full_tile", false) or e in ["Aerodrome", "Rail Station"]:
+						is_full_tile = true
+						
+			# Es un distrito si tiene 2 edificios normales o 1 edificio completo
+			if not tiene_maravilla and (reg_count >= 2 or is_full_tile):
+				bonus["Science"] += 1
+				bonus["Culture"] += 1
+				
 	return bonus
 
 func _calcular_celdas_puente_requeridas() -> Dictionary:
@@ -372,15 +383,14 @@ func es_celda_externos_valida() -> bool:
 	if dist < 2: return false
 	
 	var d = city_grid[celda_seleccionada]
-	var es_anillo_4 = (dist == 4) # <--- Variable ahora utilizada activamente
+	var es_anillo_4 = (dist == 4)
 	
-	# Las celdas reclamadas no son externas (el anillo 4 nunca se reclama, por lo que es una excepción válida)
+	# Las celdas reclamadas no son externas (el anillo 4 nunca se reclama)
 	if d.get("reclamada", false) and not es_anillo_4: return false
 	
 	var tiene_desarrollo_interno = (d.edificios.size() > 0 or d.mejora_tipo != "") and not d.ajeno
 	if tiene_desarrollo_interno: return false
 	
-	# Verificar que el terreno permita externos (evitar montañas, océanos, hielo o maravillas naturales)
 	if d.terreno in ["MOUNTAINOUS", "OCEAN"] or d.get("caracteristica", "") in ["ICE", "NATURAL_WONDER"]:
 		return false
 		
@@ -689,7 +699,6 @@ func actualizar_botones_recursos_ui():
 	var terreno_actual = datos_celda.terreno
 	var carac_actual = datos_celda.get("caracteristica", "NONE")
 	
-	# Restricción estricta de terreno y características para no mostrar recursos
 	if es_centro or terreno_actual in ["MOUNTAINOUS", "OCEAN", "NAVIGABLE_RIVER"] or carac_actual == "ICE":
 		if header_node: header_node.visible = false
 		grid_recursos.visible = false
@@ -926,7 +935,6 @@ func actualizar_panel_gestion_ui():
 			main_row.alignment = BoxContainer.ALIGNMENT_CENTER
 			main_row.add_theme_constant_override("separation", 24)
 			
-			# 1. Bloque Era
 			var vbox_era = VBoxContainer.new()
 			vbox_era.alignment = BoxContainer.ALIGNMENT_CENTER
 			vbox_era.add_theme_constant_override("separation", 4)
@@ -956,7 +964,6 @@ func actualizar_panel_gestion_ui():
 			vbox_era.add_child(lbl_era_name)
 			main_row.add_child(vbox_era)
 			
-			# 2. Bloque Líder
 			var vbox_lider = VBoxContainer.new()
 			vbox_lider.alignment = BoxContainer.ALIGNMENT_CENTER
 			vbox_lider.add_theme_constant_override("separation", 4)
@@ -986,7 +993,6 @@ func actualizar_panel_gestion_ui():
 			vbox_lider.add_child(lbl_lider_name)
 			main_row.add_child(vbox_lider)
 			
-			# 3. Bloque Civ
 			var civs_sub_hbox = HBoxContainer.new()
 			civs_sub_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 			civs_sub_hbox.add_theme_constant_override("separation", 12)
@@ -1052,7 +1058,6 @@ func actualizar_panel_gestion_ui():
 				
 			main_row.add_child(civs_sub_hbox)
 			
-			# 4. Botones
 			var buttons_vbox = VBoxContainer.new()
 			buttons_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
 			buttons_vbox.add_theme_constant_override("separation", 8)
@@ -1247,23 +1252,34 @@ func actualizar_panel_pincel():
 	var valid_c = ["NONE"]
 	var es_marine = (b_actual == "MARINE")
 
+	# Generación segura de valid_c
 	if es_marine:
 		valid_c.append("AQUATIC")
 		valid_c.append("ICE")
-		if celda_tiene_maravillas_compatibles(b_actual, t_actual) and not es_centro_gob:
-			valid_c.append("NATURAL_WONDER")
 	else:
 		if t_actual == "FLAT":
 			valid_c.append("WET")
 			valid_c.append("VEGETATED")
 			valid_c.append("FLOODPLAIN")
-		if celda_tiene_maravillas_compatibles(b_actual, t_actual) and not es_centro_gob:
-			valid_c.append("NATURAL_WONDER")
 		if t_actual == "MOUNTAINOUS":
 			valid_c.append("VOLCANO")
 		if b_actual == "TUNDRA":
 			if not "SNOW" in valid_c: valid_c.append("SNOW")
 			if not "ICE" in valid_c: valid_c.append("ICE")
+
+	# FIX MARAVILLAS: Evaluación directa contra Constantes garantizando que no se pierda en Tundra Montaña
+	var nw_compatible = false
+	if "MARAVILLAS_NATURALES" in Constantes:
+		for nw in Constantes.MARAVILLAS_NATURALES.values():
+			var b_ok = nw.get("biomas", []).is_empty() or b_actual in nw.get("biomas", [])
+			var t_ok = nw.get("terrenos", []).is_empty() or t_actual in nw.get("terrenos", [])
+			if b_ok and t_ok:
+				nw_compatible = true
+				break
+				
+	if nw_compatible and not es_centro_gob:
+		if not "NATURAL_WONDER" in valid_c:
+			valid_c.append("NATURAL_WONDER")
 
 	if not c_actual in valid_c:
 		c_actual = "NONE"
@@ -1305,7 +1321,6 @@ func actualizar_panel_pincel():
 		btn.pressed.connect(func(): _aplicar_caracteristica(c_val))
 		grid_carac.add_child(btn)
 
-	# --- CORRECCIÓN: Botón Unclaim solo si está reclamada y distancia > 1 ---
 	var asent_centro = asentamientos[asentamiento_activo_idx].centro if asentamientos.size() > 0 else Vector2i.ZERO
 	var dist_al_centro = HexMath.dist_hex(celda_seleccionada, asent_centro)
 	var es_reclamada = d.get("reclamada", false)
@@ -1322,45 +1337,230 @@ func actualizar_panel_pincel():
 			queue_redraw()
 		)
 		grid_carac.add_child(btn_unclaim)
-	# ------------------------------------------------------------------------
 
-	for child in hbox_favs.get_children(): child.queue_free()
-	var path_felicidad = resolver_ruta_asset("Happiness B.")
+	if hbox_favs:
+		for child in hbox_favs.get_children(): child.queue_free()
+		var path_felicidad = resolver_ruta_asset("Happiness B.")
+		
+		var btn_0 = _crear_btn_opcion("Normal", Color(0.5, 0.5, 0.5), f_actual == 0)
+		btn_0.pressed.connect(func(): _marcar_favorita(0))
+		hbox_favs.add_child(btn_0)
+		
+		var btn_1 = _crear_btn_opcion("", Color(0.56, 0.93, 0.56), f_actual == 1)
+		if ResourceLoader.exists(path_felicidad):
+			btn_1.icon = load(path_felicidad)
+			btn_1.expand_icon = true
+			btn_1.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		else:
+			btn_1.text = "+1"
+		btn_1.pressed.connect(func(): _marcar_favorita(1))
+		hbox_favs.add_child(btn_1)
+		
+		var btn_2 = _crear_btn_opcion("", Color(0.13, 0.54, 0.13), f_actual == 2)
+		if ResourceLoader.exists(path_felicidad):
+			var hb = HBoxContainer.new()
+			hb.set_anchors_preset(Control.PRESET_FULL_RECT)
+			hb.alignment = BoxContainer.ALIGNMENT_CENTER
+			hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var tex = load(path_felicidad)
+			for i in range(2):
+				var tex_rect_icon = TextureRect.new()
+				tex_rect_icon.texture = tex
+				tex_rect_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				tex_rect_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				tex_rect_icon.custom_minimum_size = Vector2(24, 24)
+				tex_rect_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				hb.add_child(tex_rect_icon)
+			btn_2.add_child(hb)
+		else:
+			btn_2.text = "+2"
+		btn_2.pressed.connect(func(): _marcar_favorita(2))
+		hbox_favs.add_child(btn_2)
+
+		# ==============================================================================
+		# DESPLEGABLE MARAVILLAS NATURALES
+		# ==============================================================================
+		var parent_container = grid_carac.get_parent()
+		if parent_container:
+			var old_nw = parent_container.get_node_or_null("NW_Container")
+			if old_nw:
+				old_nw.name = "ToDelete"
+				old_nw.queue_free()
+
+			if c_actual == "NATURAL_WONDER":
+				var vbox_nw = VBoxContainer.new()
+				vbox_nw.name = "NW_Container"
+				vbox_nw.add_theme_constant_override("separation", 6)
+				
+				vbox_nw.add_child(HSeparator.new())
+				
+				var lbl_nw = Label.new()
+				lbl_nw.text = "SELECT NATURAL WONDER"
+				lbl_nw.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				lbl_nw.add_theme_font_size_override("font_size", 14)
+				lbl_nw.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+				vbox_nw.add_child(lbl_nw)
+				
+				var opt_nw = OptionButton.new()
+				opt_nw.custom_minimum_size = Vector2(0, 32)
+				
+				var nw_validas = []
+				if "MARAVILLAS_NATURALES" in Constantes:
+					for nw_name in Constantes.MARAVILLAS_NATURALES.keys():
+						var data_nw = Constantes.MARAVILLAS_NATURALES[nw_name]
+						var b_ok = data_nw.get("biomas", []).is_empty() or b_actual in data_nw.get("biomas", [])
+						var t_ok = data_nw.get("terrenos", []).is_empty() or t_actual in data_nw.get("terrenos", [])
+						if b_ok and t_ok:
+							nw_validas.append(nw_name)
+							
+				if nw_validas.size() > 0:
+					for nw in nw_validas:
+						opt_nw.add_item(nw)
+					
+					# Guardamos el recurso internamente para mantener la maravilla
+					var current_nw = d.get("recurso", "")
+					var found = false
+					for i in range(opt_nw.item_count):
+						if opt_nw.get_item_text(i) == current_nw:
+							opt_nw.select(i)
+							found = true
+							break
+					
+					if not found:
+						opt_nw.select(0)
+						d["recurso"] = opt_nw.get_item_text(0)
+						
+					opt_nw.item_selected.connect(func(idx):
+						d["recurso"] = opt_nw.get_item_text(idx)
+						queue_redraw()
+					)
+				else:
+					opt_nw.add_item("No valid wonders")
+					opt_nw.disabled = true
+					
+				vbox_nw.add_child(opt_nw)
+				parent_container.add_child(vbox_nw)
+				# Mover el contenedor al final del panel
+				parent_container.move_child(vbox_nw, -1)
+
+
+func es_mejora_valida(coord: Vector2i, mejora_nombre: String, asent_centro: Vector2i, city_grid: Dictionary, era_actual: String = "Antiquity", civ_actual: String = "None", tipo_asentamiento: String = "Town") -> bool:
+	if not city_grid.has(coord): return false
+	if city_grid[coord].get("ajeno", false): return false
+	if HexMath.dist_hex(coord, asent_centro) > 3: return false
 	
-	var btn_0 = _crear_btn_opcion("Normal", Color(0.5, 0.5, 0.5), f_actual == 0)
-	btn_0.pressed.connect(func(): _marcar_favorita(0))
-	hbox_favs.add_child(btn_0)
+	var datos = city_grid[coord]
 	
-	var btn_1 = _crear_btn_opcion("", Color(0.56, 0.93, 0.56), f_actual == 1)
-	if ResourceLoader.exists(path_felicidad):
-		btn_1.icon = load(path_felicidad)
-		btn_1.expand_icon = true
-		btn_1.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# ==============================================================================
+	# RESTRICCIÓN ESTRICTA DE CONSTRUCCIÓN: MARAVILLAS NATURALES
+	# ==============================================================================
+	var es_maravilla_natural = (datos.get("caracteristica", "") == "NATURAL_WONDER" or datos.get("terreno", "") == "NATURAL_WONDER")
+	
+	if es_maravilla_natural:
+		if mejora_nombre != "Expedition Base":
+			return false
 	else:
-		btn_1.text = "+1"
-	btn_1.pressed.connect(func(): _marcar_favorita(1))
-	hbox_favs.add_child(btn_1)
+		if mejora_nombre == "Expedition Base":
+			return false
+	# ==============================================================================
 	
-	var btn_2 = _crear_btn_opcion("", Color(0.13, 0.54, 0.13), f_actual == 2)
-	if ResourceLoader.exists(path_felicidad):
-		var hb = HBoxContainer.new()
-		hb.set_anchors_preset(Control.PRESET_FULL_RECT)
-		hb.alignment = BoxContainer.ALIGNMENT_CENTER
-		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var tex = load(path_felicidad)
-		for i in range(2):
-			var tex_rect_icon = TextureRect.new()
-			tex_rect_icon.texture = tex
-			tex_rect_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			tex_rect_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-			tex_rect_icon.custom_minimum_size = Vector2(24, 24)
-			tex_rect_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			hb.add_child(tex_rect_icon)
-		btn_2.add_child(hb)
-	else:
-		btn_2.text = "+2"
-	btn_2.pressed.connect(func(): _marcar_favorita(2))
-	hbox_favs.add_child(btn_2)
+	var t = datos.get("terreno", "").strip_edges().to_upper()
+	
+	# EXCEPCIÓN AL BLOQUEO DE MONTAÑAS:
+	# Si estamos en Antiquity y es montaña, se bloquea todo...
+	# EXCEPTO si la montaña es en realidad una Maravilla Natural.
+	if era_actual == "Antiquity" and t in ["MOUNTAINOUS", "MONTAÑA"]:
+		if not es_maravilla_natural:
+			return false
+			
+	var b = datos.get("bioma", "").strip_edges().to_upper()
+	var f = datos.get("caracteristica", "NONE").strip_edges().to_upper()
+	var res = datos.get("recurso", "")
+	var rio = datos.get("rio", false)
+
+	var adyacentes_misma_mejora = 0
+	var distritos_adyacentes = 0
+	var celdas_coastal_adyacentes = 0
+	var rio_adyacente = rio
+
+	for vec in HexMath.VECINOS_HEX:
+		var n = coord + vec
+		if city_grid.has(n):
+			if city_grid[n].get("mejora_tipo", "") == mejora_nombre: adyacentes_misma_mejora += 1
+			var bld_count = 0
+			for e in city_grid[n].edificios:
+				if not es_edificio_muralla(e) and not es_edificio_obsoleto(e, n, era_actual, city_grid): bld_count += 1
+			if bld_count >= 2: distritos_adyacentes += 1
+			if city_grid[n].get("terreno", "").strip_edges().to_upper() in ["COASTAL", "COSTA"]: celdas_coastal_adyacentes += 1
+			if city_grid[n].get("rio", false): rio_adyacente = true
+
+	match mejora_nombre:
+		"Quarry":
+			if era_actual == "Modern Age": return res in ["Jade", "Kaolin", "Limestone", "Marble"]
+			elif era_actual == "Exploration": return res in ["Gypsum", "Jade", "Kaolin", "Limestone", "Marble"]
+			else: return res in ["Gypsum", "Jade", "Kaolin", "Marble", "Limestone"]
+		"Clay Pit":
+			if era_actual == "Modern Age": return f == "WET" or t in ["HUMEDO", "WET"]
+			else: return f == "WET" or t in ["HUMEDO", "WET"] or res == "Clay"
+		"Expedition Base":
+			if era_actual == "Exploration" and civ_actual == "Incan": return f == "NATURAL_WONDER" or t in ["MOUNTAINOUS", "MONTAÑA"]
+			elif era_actual == "Modern Age": return f == "NATURAL_WONDER" or t in ["MOUNTAINOUS", "MONTAÑA"]
+			else: return f == "NATURAL_WONDER"
+		"Farm": return t in ["FLAT", "PLANO"]
+		"Woodcutter":
+			if era_actual == "Antiquity": return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res == "Hardwood"
+			elif era_actual == "Exploration": return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res in ["Cocoa", "Hardwood", "Spices"]
+			else: return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res in ["Cocoa", "Hardwood", "Quinine", "Rubber", "Spices"]
+		"Fishing Boat":
+			var val_water = (t in ["COASTAL", "COSTA", "NAVIGABLE_RIVER", "RIO_NAVEGABLE"]) and not rio
+			if era_actual == "Antiquity": return val_water or res in ["Cowrie", "Crabs", "Dyes", "Fish", "Pearls", "Turtles"]
+			elif era_actual == "Exploration": return val_water or res in ["Cowrie", "Crabs", "Dyes", "Fish", "Pearls", "Turtles", "Whales"]
+			else: return val_water or res in ["Cowrie", "Crabs", "Fish", "Pearls", "Whales"]
+		"Mine":
+			if era_actual == "Antiquity": return t in ["ROUGH", "ABRUPTO"] or res in ["Gold", "Iron", "Rubies", "Salt", "Silver", "Tin"]
+			elif era_actual == "Exploration": return t in ["ROUGH", "ABRUPTO"] or res in ["Gold", "Iron", "Rubies", "Silver", "Niter", "Tin"]
+			else: return t in ["ROUGH", "ABRUPTO"] or res in ["Coal", "Gold", "Iron", "Niter", "Silver", "Tin"]
+		"Camp":
+			if era_actual == "Antiquity": return res in ["Ivory", "Camels", "Hides", "Wild Game"]
+			elif era_actual == "Exploration": return res in ["Camels", "Furs", "Ivory", "Truffles", "Wild Game"]
+			else: return res in ["Furs", "Ivory", "Truffles"]
+		"Pasture": return res in ["Horses", "Llamas", "Wool"] if era_actual == "Antiquity" else res in ["Horses", "Llamas"]
+		"Plantation":
+			if era_actual == "Antiquity": return res in ["Cotton", "Dates", "Flax", "Incense", "Mangoes", "Rice", "Silk", "Wine"]
+			elif era_actual == "Exploration": return res in ["Cotton", "Dates", "Flax", "Incense", "Mangoes", "Rice", "Silk", "Sugar", "Tea", "Wine"]
+			else: return res in ["Citrus", "Coffee", "Cotton", "Rice", "Silk", "Sugar", "Tea", "Tobacco", "Wine"]
+		"Oil Rig": return res == "Oil"
+		"Baray": return t in ["FLAT", "PLANO"] and adyacentes_misma_mejora == 0
+		"Great Wall", "Ming Great Wall": return adyacentes_misma_mejora <= 2
+		"Hawilt", "Poktop", "Megalith": return t in ["FLAT", "PLANO"]
+		"Jinja": return true
+		"Pairidaeza", "Emporium", "Yakhchal", "Tea House", "Hidden Fortress", "Mawaskawe Skote", "Water Puppet Theater", "Company Post", "Stepwell", "Abattoir", "Entrepot", "Institute", "Circus Fair":
+			if adyacentes_misma_mejora > 0: return false
+			if mejora_nombre == "Yakhchal": return b == "DESERT"
+			if mejora_nombre == "Tea House" or mejora_nombre == "Stepwell": return t in ["FLAT", "PLANO"]
+			if mejora_nombre == "Hidden Fortress": return t in ["ROUGH", "ABRUPTO"]
+			if mejora_nombre == "Mawaskawe Skote": return f in ["VEGETATED", "VEGETACION"]
+			if mejora_nombre == "Water Puppet Theater": return b != "MARINE" and rio_adyacente
+			if mejora_nombre == "Entrepot": return t in ["NAVIGABLE_RIVER", "RIO_NAVEGABLE"]
+			return true
+		"Festival Grounds": return t in ["FLAT", "PLANO"] and distritos_adyacentes > 0 and adyacentes_misma_mejora == 0
+		"Hillfort": return t in ["ROUGH", "ABRUPTO"]
+		"Step Pyramid", "Stone Head": return datos.get("favorita", 0) == 0
+		"Caravanserai": return b == "DESERT" or b == "PLAINS"
+		"Gama": return f in ["VEGETATED", "VEGETACION"]
+		"Loi Kalo": return b == "GRASSLAND" or b == "TROPICAL"
+		"Ortoo", "Terrace Farm": return t not in ["ROUGH", "ABRUPTO"] and not rio and f == "NONE"
+		"Kasbah": return b == "DESERT"
+		"Minor Embassy": return tipo_asentamiento == "City" or tipo_asentamiento == "Capital"
+		"Monastery": return distritos_adyacentes == 0
+		"Saqiya": return f == "FLOODPLAIN"
+		"Bang": return t in ["NAVIGABLE_RIVER", "RIO_NAVEGABLE"]
+		"Highland Power Station": return f == "NONE" or (t in ["MOUNTAINOUS", "MONTAÑA"] and civ_actual == "Nepalese")
+		"Kabakas Lake", "Open-Air Museum": return t in ["FLAT", "PLANO"]
+		"Obshchina": return adyacentes_misma_mejora == 0
+		"Staatseisenbahn": return true
+		"Shore Battery": return b != "MARINE" and celdas_coastal_adyacentes > 0
+	return true
 
 func _crear_cabecera_panel(texto: String, asset_name: String) -> HBoxContainer:
 	var hbox = HBoxContainer.new()
@@ -1430,7 +1630,6 @@ func actualizar_panel_construccion():
 	var asent_centro = asentamientos[asentamiento_activo_idx].centro
 	var asent_tipo = asentamientos[asentamiento_activo_idx].tipo
 
-	# --- CORRECCIÓN: Botón Claim para celdas no reclamadas ---
 	var is_reclamada = datos_c.get("reclamada", false)
 	
 	if not is_reclamada:
@@ -1442,7 +1641,7 @@ func actualizar_panel_construccion():
 		sb_claim.set_corner_radius_all(8)
 		btn_claim.add_theme_stylebox_override("normal", sb_claim)
 		btn_claim.pressed.connect(func():
-			datos_c.reclamada = true
+			datos_c["reclamada"] = true
 			actualizar_panel_construccion()
 			actualizar_panel_pincel()
 			actualizar_visibilidad_boton_externos()
@@ -1450,11 +1649,10 @@ func actualizar_panel_construccion():
 			queue_redraw()
 		)
 		vbox.add_child(btn_claim)
-		return # Cortamos aquí para que no se muestre el resto si no está reclamada
-	# ---------------------------------------------------------
+		return 
 
 	var recurso_celda = datos_c.get("recurso", "")
-	var ajeno = datos_c.ajeno
+	var ajeno = datos_c.get("ajeno", false)
 	var tiene_maravilla = false
 	var es_hielo = datos_c.get("caracteristica", "") == "ICE"
 	
@@ -1463,6 +1661,7 @@ func actualizar_panel_construccion():
 			tiene_maravilla = true
 			break
 
+	# El panel de construcción normal bloquea el uso si la celda es ajena
 	if not ajeno and not tiene_maravilla and not es_hielo:
 		var es_centro_gob = datos_c.edificios.has("Palace") or datos_c.edificios.has("Town Hall")
 		var mejora_actual = datos_c.get("mejora_tipo", "")
@@ -1515,21 +1714,20 @@ func actualizar_panel_construccion():
 				var era_edif = d.get("era", "All")
 				if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
 				if d.has("civ") and d.civ != civ_actual and d.civ != civ_sincretismo: continue
-				if edificios_construidos.has(edif_nombre) and not d.get("is_wonder", false): continue
+				
+				var es_muralla = ReglasJuego.es_edificio_muralla(edif_nombre)
+				if edificios_construidos.has(edif_nombre) and not d.get("is_wonder", false) and not es_muralla: continue
+				if edif_nombre in datos_c.edificios: continue
+				
 				if not ReglasJuego.es_ubicacion_valida_para_edificio(celda_seleccionada, edif_nombre, asent_centro, era_actual, civ_actual, city_grid, asent_tipo, asentamientos): continue
 				if datos_c.terreno == "NATURAL_WONDER" or datos_c.get("caracteristica", "") == "NATURAL_WONDER": continue
 				
-				if not ReglasJuego.es_edificio_muralla(edif_nombre):
+				if not es_muralla:
 					var reg_count = 0
+					var is_full_tile = d.get("full_tile", false) or edif_nombre in ["Aerodrome", "Rail Station"]
 					for e in datos_c.edificios:
 						if not ReglasJuego.es_edificio_muralla(e) and not ReglasJuego.es_edificio_obsoleto(e, celda_seleccionada, era_actual, city_grid): reg_count += 1
-					if reg_count >= 2: continue
-				
-				if d.get("full_tile", false):
-					var tiene_no_obsoleto = false
-					for e in datos_c.edificios:
-						if not ReglasJuego.es_edificio_obsoleto(e, celda_seleccionada, era_actual, city_grid): tiene_no_obsoleto = true
-					if tiene_no_obsoleto: continue
+					if reg_count >= 2 and not is_full_tile: continue
 					
 				if d.get("is_wonder", false): maravillas_validas = true
 				else:
@@ -1547,30 +1745,30 @@ func actualizar_panel_construccion():
 				
 				var is_wonder = d.get("is_wonder", false)
 				var is_generic = d.get("is_generic", false)
+				var es_muralla = ReglasJuego.es_edificio_muralla(edif_nombre)
 				
 				if is_generic:
+					var era_edif = d.get("era", "All")
+					if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
+					if d.has("civ") and d.civ != civ_actual and d.civ != civ_sincretismo: continue
 					if is_wonder and not maravillas_validas: continue
-					if not is_wonder and not rendimientos_validos.has(d.get("rendimiento", "")): continue
 					lista_genericos.append({"nombre": edif_nombre, "ady": 0, "d": d, "wonder": is_wonder, "generic": true})
 				else:
 					var era_edif = d.get("era", "All")
 					if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
 					if d.has("civ") and d.civ != civ_actual and d.civ != civ_sincretismo: continue
-					if edificios_construidos.has(edif_nombre) and not is_wonder: continue
+					if edificios_construidos.has(edif_nombre) and not is_wonder and not es_muralla: continue
+					if edif_nombre in datos_c.edificios: continue
+					
 					if not ReglasJuego.es_ubicacion_valida_para_edificio(celda_seleccionada, edif_nombre, asent_centro, era_actual, civ_actual, city_grid, asent_tipo, asentamientos): continue
 					if datos_c.terreno == "NATURAL_WONDER" or datos_c.get("caracteristica", "") == "NATURAL_WONDER": continue
 				
-					if not ReglasJuego.es_edificio_muralla(edif_nombre):
+					if not es_muralla:
 						var reg_count = 0
+						var is_full_tile = d.get("full_tile", false) or edif_nombre in ["Aerodrome", "Rail Station"]
 						for e in datos_c.edificios:
 							if not ReglasJuego.es_edificio_muralla(e) and not ReglasJuego.es_edificio_obsoleto(e, celda_seleccionada, era_actual, city_grid): reg_count += 1
-						if reg_count >= 2: continue
-				
-					if d.get("full_tile", false):
-						var tiene_no_obsoleto = false
-						for e in datos_c.edificios:
-							if not ReglasJuego.es_edificio_obsoleto(e, celda_seleccionada, era_actual, city_grid): tiene_no_obsoleto = true
-						if tiene_no_obsoleto: continue
+						if reg_count >= 2 and not is_full_tile: continue
 						
 				var ady = 0 if is_generic else ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif_nombre, era_actual, city_grid)
 				lista_candidatos.append({"nombre": edif_nombre, "ady": ady, "d": d, "wonder": is_wonder, "generic": is_generic})
@@ -1622,6 +1820,36 @@ func actualizar_panel_construccion():
 				vbox.add_child(_crear_cabecera_panel("WONDERS", "wonder"))
 				vbox.add_child(grid_mar_c)
 
+func _añadir_boton_reclamar_ajeno(vbox_panel_externo: Node, datos_celda: Dictionary):
+	if not datos_celda.get("ajeno", false):
+		var btn_claim_ajeno = Button.new()
+		btn_claim_ajeno.text = "🚩 CLAIM FOR EXTERNAL"
+		btn_claim_ajeno.custom_minimum_size = Vector2(0, 44)
+		var sb_ajeno = StyleBoxFlat.new()
+		sb_ajeno.bg_color = Color(0.6, 0.2, 0.2)
+		sb_ajeno.set_corner_radius_all(6)
+		btn_claim_ajeno.add_theme_stylebox_override("normal", sb_ajeno)
+		
+		btn_claim_ajeno.pressed.connect(func():
+			datos_celda["ajeno"] = true
+			datos_celda["reclamada"] = true
+			
+			actualizar_panel_externos()
+			actualizar_panel_construccion()
+			actualizar_panel_ui()
+			guardar_partida_actual()
+			queue_redraw()
+		)
+		vbox_panel_externo.add_child(btn_claim_ajeno)
+		vbox_panel_externo.add_child(HSeparator.new())
+	else:
+		var lbl_ajeno = Label.new()
+		lbl_ajeno.text = "LOCKED: EXTERNAL USE"
+		lbl_ajeno.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_ajeno.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
+		vbox_panel_externo.add_child(lbl_ajeno)
+		vbox_panel_externo.add_child(HSeparator.new())
+
 func actualizar_panel_externos():
 	if lbl_ext_edif: lbl_ext_edif.visible = false
 	if lbl_ext_mej: lbl_ext_mej.visible = false
@@ -1661,7 +1889,8 @@ func actualizar_panel_externos():
 	var dist = HexMath.dist_hex(celda_seleccionada, asent_centro)
 	var es_anillo_4 = (dist == 4)
 	
-	# Evaluar qué hay construido actualmente en la celda
+	_añadir_boton_reclamar_ajeno(vbox, d)
+	
 	var tiene_mejora = d.get("mejora_tipo", "") != ""
 	var tiene_wonder = false
 	var tiene_edificio_normal = false
@@ -1673,7 +1902,6 @@ func actualizar_panel_externos():
 		else:
 			tiene_edificio_normal = true
 
-	# SUBIR EL BOTÓN DE QUITAR ELEMENTOS ARRIBA SI HAY ALGO CONSTRUIDO
 	var tiene_algo_construido = d.get("ajeno", false) or tiene_mejora or d.get("edificios", []).size() > 0
 	if tiene_algo_construido:
 		var btn_borrar = Button.new()
@@ -1694,7 +1922,6 @@ func actualizar_panel_externos():
 
 	if btn_del_ext: btn_del_ext.visible = false
 
-	# REGLA: Si hay una Wonder, desaparecen todas las listas quedando solo el botón de quitar elementos arriba
 	if tiene_wonder:
 		return
 
@@ -1703,7 +1930,6 @@ func actualizar_panel_externos():
 	var lista_maravillas = []
 	var recurso_celda = d.get("recurso", "")
 
-	# REGLA: Si hay un edificio normal, la lista de improvements y wonders debe desaparecer
 	var permitir_mejoras = not tiene_edificio_normal
 	var permitir_maravillas = not tiene_edificio_normal
 
@@ -1713,7 +1939,6 @@ func actualizar_panel_externos():
 			var era_mej = d_mej.get("era", "Antiquity")
 			if Constantes.ORDEN_ERAS.get(era_mej, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
 			
-			# Omitir si la mejora ya está colocada en esta celda
 			if d.get("mejora_tipo", "") == mej_nombre: continue
 			
 			if recurso_celda != "":
@@ -1738,7 +1963,6 @@ func actualizar_panel_externos():
 			var era_edif = d_edif.get("era", "All")
 			if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
 			
-			# Omitir si el edificio o maravilla ya está presente en la celda
 			if edif_nombre in d.get("edificios", []): continue
 			
 			var es_maravilla = d_edif.get("is_wonder", false)
@@ -1809,10 +2033,8 @@ func cambiar_seccion(nueva_seccion: String):
 	if panel_asentamientos_ui: panel_asentamientos_ui.visible = (nueva_seccion == "ASENTAMIENTOS")
 	if panel_maravillas: panel_maravillas.visible = (nueva_seccion == "MARAVILLAS")
 	
-	# --- CORRECCIÓN: Evitar el espacio en blanco de panel_info ---
 	var mostrar_info = (nueva_seccion != "ASENTAMIENTOS" and nueva_seccion != "EXTERNOS")
-	if panel_info:
-		panel_info.visible = mostrar_info
+	if panel_info: panel_info.visible = mostrar_info
 
 	if lbl_info:
 		lbl_info.visible = mostrar_info
@@ -1820,7 +2042,6 @@ func cambiar_seccion(nueva_seccion: String):
 		if padre:
 			var dyn_node = padre.get_node_or_null("ContenedorInfoDinamico")
 			if dyn_node: dyn_node.visible = mostrar_info
-	# -----------------------------------------------------------------
 
 	if btn_menu_asentamientos: btn_menu_asentamientos.modulate = Color(1.3, 1.3, 1.3) if seccion_actual == "ASENTAMIENTOS" else Color(0.7, 0.7, 0.7)
 	if btn_menu_pincel: btn_menu_pincel.modulate = Color(1.3, 1.3, 1.3) if seccion_actual == "PINCEL" else Color(0.7, 0.7, 0.7)
@@ -1865,16 +2086,6 @@ func actualizar_panel_ui():
 	lbl_info.visible = false
 	for c in dyn_node.get_children(): c.queue_free()
 	
-	var ter_desc = d.terreno.to_lower().capitalize()
-	if ter_desc == "Flat": ter_desc = ""
-	var carac = d.get("caracteristica", "NONE")
-	var carac_desc = "" if carac == "NONE" else carac.to_lower().capitalize()
-	
-	var combinada = d.bioma.to_upper()
-	if ter_desc != "": combinada += " " + ter_desc.to_upper()
-	if carac_desc != "": combinada += " " + carac_desc.to_upper()
-	if d.get("rio", false): combinada += " MINOR RIVER"
-	
 	var appeal_val = d.get("favorita", 0)
 	if appeal_val > 0:
 		var hbox_appeal = HBoxContainer.new()
@@ -1890,54 +2101,66 @@ func actualizar_panel_ui():
 				hbox_appeal.add_child(tex_rect)
 		dyn_node.add_child(hbox_appeal)
 		
-	var hbox_ter = HBoxContainer.new()
-	hbox_ter.add_theme_constant_override("separation", 6)
-	
 	var asent_centro = asentamientos[asentamiento_activo_idx].centro if (asentamientos.size() > 0 and asentamiento_activo_idx < asentamientos.size()) else Vector2i.ZERO
 	var es_reclamada = d.get("reclamada", HexMath.dist_hex(celda_seleccionada, asent_centro) <= 1)
-	if es_reclamada:
-		var panel_claim = PanelContainer.new()
-		var sb_claim = StyleBoxFlat.new()
-		sb_claim.bg_color = Color.WHITE
-		sb_claim.set_corner_radius_all(4)
-		panel_claim.add_theme_stylebox_override("panel", sb_claim)
-		var lbl_claim = Label.new()
-		lbl_claim.text = " 🏴 "
-		lbl_claim.add_theme_color_override("font_color", Color.BLACK)
-		lbl_claim.add_theme_font_size_override("font_size", 14)
-		panel_claim.add_child(lbl_claim)
-		hbox_ter.add_child(panel_claim)
+	
+	if es_reclamada or d.get("ajeno", false):
+		var ter_desc = d.terreno.to_lower().capitalize()
+		if ter_desc == "Flat": ter_desc = ""
+		var carac = d.get("caracteristica", "NONE")
+		var carac_desc = "" if carac == "NONE" else carac.to_lower().capitalize()
 		
-	var panel_ter = PanelContainer.new()
-	var sb_ter = StyleBoxFlat.new()
-	sb_ter.bg_color = Constantes.COLORES_BIOMA.get(d.bioma, Color(0.5, 0.5, 0.5))
-	sb_ter.set_corner_radius_all(4)
-	panel_ter.add_theme_stylebox_override("panel", sb_ter)
-	var lbl_ter = Label.new()
-	lbl_ter.text = " " + combinada + " "
-	lbl_ter.add_theme_color_override("font_color", Color.BLACK)
-	lbl_ter.add_theme_font_size_override("font_size", 14)
-	panel_ter.add_child(lbl_ter)
-	hbox_ter.add_child(panel_ter)
+		var combinada = d.bioma.to_upper()
+		if ter_desc != "": combinada += " " + ter_desc.to_upper()
+		if carac_desc != "": combinada += " " + carac_desc.to_upper()
+		if d.get("rio", false): combinada += " MINOR RIVER"
 	
-	var es_urbano = _es_celda_urbana(celda_seleccionada)
-	var tipo_celda_str = "URBAN" if es_urbano else "RURAL"
-	var color_fondo_tipo = Color(0.2, 0.4, 0.8) if es_urbano else Color(0.85, 0.2, 0.2)
+		var hbox_ter = HBoxContainer.new()
+		hbox_ter.add_theme_constant_override("separation", 6)
+		
+		if es_reclamada:
+			var panel_claim = PanelContainer.new()
+			var sb_claim = StyleBoxFlat.new()
+			sb_claim.bg_color = Color.WHITE
+			sb_claim.set_corner_radius_all(4)
+			panel_claim.add_theme_stylebox_override("panel", sb_claim)
+			var lbl_claim = Label.new()
+			lbl_claim.text = " 🏴 "
+			lbl_claim.add_theme_color_override("font_color", Color.BLACK)
+			lbl_claim.add_theme_font_size_override("font_size", 14)
+			panel_claim.add_child(lbl_claim)
+			hbox_ter.add_child(panel_claim)
+			
+		var panel_ter = PanelContainer.new()
+		var sb_ter = StyleBoxFlat.new()
+		sb_ter.bg_color = Constantes.COLORES_BIOMA.get(d.bioma, Color(0.5, 0.5, 0.5))
+		sb_ter.set_corner_radius_all(4)
+		panel_ter.add_theme_stylebox_override("panel", sb_ter)
+		var lbl_ter = Label.new()
+		lbl_ter.text = " " + combinada + " "
+		lbl_ter.add_theme_color_override("font_color", Color.BLACK)
+		lbl_ter.add_theme_font_size_override("font_size", 14)
+		panel_ter.add_child(lbl_ter)
+		hbox_ter.add_child(panel_ter)
+		
+		var es_urbano = _es_celda_urbana(celda_seleccionada)
+		var tipo_celda_str = "URBAN" if es_urbano else "RURAL"
+		var color_fondo_tipo = Color(0.2, 0.4, 0.8) if es_urbano else Color(0.85, 0.2, 0.2)
+		
+		var panel_tipo = PanelContainer.new()
+		var sb_tipo = StyleBoxFlat.new()
+		sb_tipo.bg_color = color_fondo_tipo
+		sb_tipo.set_corner_radius_all(4)
+		panel_tipo.add_theme_stylebox_override("panel", sb_tipo)
+		var lbl_tipo = Label.new()
+		lbl_tipo.text = " " + tipo_celda_str + " "
+		lbl_tipo.add_theme_color_override("font_color", Color.WHITE)
+		lbl_tipo.add_theme_font_size_override("font_size", 14)
+		panel_tipo.add_child(lbl_tipo)
+		hbox_ter.add_child(panel_tipo)
+		dyn_node.add_child(hbox_ter)
 	
-	var panel_tipo = PanelContainer.new()
-	var sb_tipo = StyleBoxFlat.new()
-	sb_tipo.bg_color = color_fondo_tipo
-	sb_tipo.set_corner_radius_all(4)
-	panel_tipo.add_theme_stylebox_override("panel", sb_tipo)
-	var lbl_tipo = Label.new()
-	lbl_tipo.text = " " + tipo_celda_str + " "
-	lbl_tipo.add_theme_color_override("font_color", Color.WHITE)
-	lbl_tipo.add_theme_font_size_override("font_size", 14)
-	panel_tipo.add_child(lbl_tipo)
-	hbox_ter.add_child(panel_tipo)
-	dyn_node.add_child(hbox_ter)
-	
-	var r_yield = ReglasJuego.calcular_rendimiento_celda(d.bioma, d.terreno, carac, d.get("recurso", ""), d.get("rio", false), era_actual)
+	var r_yield = ReglasJuego.calcular_rendimiento_celda(d.bioma, d.terreno, d.get("caracteristica", "NONE"), d.get("recurso", ""), d.get("rio", false), era_actual)
 	var yields_sum = {
 		"Food": r_yield.get("Food", 0), "Production": r_yield.get("Production", 0), 
 		"Gold": r_yield.get("Gold", 0), "Culture": r_yield.get("Culture", 0), 
@@ -1953,21 +2176,24 @@ func actualizar_panel_ui():
 			if edif == "Palace":
 				yields_sum["Food"] += 5 * era_mult
 				yields_sum["Production"] += 5 * era_mult
-				yields_sum["Happiness"] += 5 * era_mult
+				if asentamiento_tiene_agua_dulce(celda_seleccionada):
+					yields_sum["Happiness"] += 5 * era_mult
+					
 				var adj_palacio = calcular_adyacencia_palacio(celda_seleccionada)
-				yields_sum["Science"] += adj_palacio["Science"]
-				yields_sum["Culture"] += adj_palacio["Culture"]
-				if not asentamiento_tiene_agua_dulce(celda_seleccionada): yields_sum["Happiness"] -= 5
+				yields_sum["Science"] += adj_palacio["Science"] * era_mult
+				yields_sum["Culture"] += adj_palacio["Culture"] * era_mult
+				
 			elif edif == "Town Hall":
 				yields_sum["Food"] += 3 * era_mult
-				yields_sum["Happiness"] += 3 * era_mult
-				var asent_t = ""
+				yields_sum["Production"] += 3 * era_mult
+				
+				var asent_t = "Town"
 				for asent in asentamientos:
-					if asent.grid.has(celda_seleccionada):
+					if asent.grid.has(celda_seleccionada) or asent.centro == celda_seleccionada:
 						asent_t = asent.tipo
 						break
-				if asent_t == "City" or asent_t == "Capital": yields_sum["Production"] += 3 * era_mult
-				if not asentamiento_tiene_agua_dulce(celda_seleccionada): yields_sum["Happiness"] -= 5
+				if (asent_t == "City" or asent_t == "Capital") and asentamiento_tiene_agua_dulce(celda_seleccionada):
+					yields_sum["Happiness"] += 3 * era_mult
 			
 			elif Constantes.DATOS_EDIFICIOS.has(edif) and not ReglasJuego.es_edificio_obsoleto(edif, celda_seleccionada, era_actual, city_grid):
 				var datos_edif = Constantes.DATOS_EDIFICIOS[edif]
@@ -2028,54 +2254,7 @@ func actualizar_panel_ui():
 			for k in yields_sum.keys():
 				if yields_sum[k] > 0: yields_sum[k] += int(yields_sum[k] * 0.5 * nw_count)
 
-		var es_centro_gob = (d.edificios.has("Palace") or d.edificios.has("Town Hall"))
-		if es_centro_gob:
-			var as_tipo = "Town"
-			var my_as = null
-			for a in asentamientos:
-				if a.centro == celda_seleccionada:
-					as_tipo = a.tipo
-					my_as = a
-					break
-			
-			if "culture_happiness_in_settlements" in l_bonos_lista:
-				yields_sum["Culture"] += 1 * era_mult
-				yields_sum["Happiness"] += 1 * era_mult
-			if "prod_in_capital_per_town" in l_bonos_lista and as_tipo == "Capital":
-				var t_count = 0
-				for a in asentamientos:
-					if a.tipo == "Town": t_count += 1
-				yields_sum["Production"] += 2 * t_count
-			if "culture_per_unique_resource" in l_bonos_lista and my_as:
-				var u_res = {}
-				for a in asentamientos:
-					for coord in a.grid:
-						if city_grid.has(coord) and city_grid[coord].get("recurso", "") != "" and city_grid[coord].get("mejora_tipo", "") != "":
-							u_res[city_grid[coord].recurso] = true
-				yields_sum["Culture"] += u_res.size() * era_mult
-			if "prod_river_city" in l_bonos_lista and as_tipo in ["City", "Capital"] and d.get("rio", false):
-				yields_sum["Production"] = int(yields_sum["Production"] * 1.15)
-			if "tundra_culture_to_science" in l_bonos_lista and d.bioma.to_upper() == "TUNDRA":
-				yields_sum["Science"] += int(yields_sum["Culture"] * 0.25)
-			if "tropical_science_boost" in l_bonos_lista and d.bioma.to_upper() in ["JUNGLE", "TROPICAL"]:
-				yields_sum["Science"] = int(yields_sum["Science"] * 1.1)
-			if "wonder_prod_cult_boost" in l_bonos_lista and as_tipo == "City" and my_as:
-				var has_w = false
-				for coord in my_as.grid:
-					if city_grid.has(coord):
-						for e in city_grid[coord].edificios:
-							if Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false): has_w = true
-				if has_w:
-					yields_sum["Production"] = int(yields_sum["Production"] * 1.10)
-					yields_sum["Culture"] = int(yields_sum["Culture"] * 1.10)
-			if "prod_from_food" in l_bonos_lista:
-				yields_sum["Production"] += int(yields_sum["Food"] * 0.1)
-			if "gold_boost_settlements" in l_bonos_lista:
-				yields_sum["Gold"] = int(yields_sum["Gold"] * 1.1)
-			if "culture_science_modifier" in l_bonos_lista:
-				yields_sum["Culture"] = int(yields_sum["Culture"] * 1.15)
-				yields_sum["Science"] = int(yields_sum["Science"] * 0.85)
-
+	# --- CAJA DE RENDIMIENTOS GENERALES DE LA CELDA ---
 	var panel_y = PanelContainer.new()
 	var sb_y = StyleBoxFlat.new()
 	sb_y.bg_color = Color(0.12, 0.12, 0.15)
@@ -2147,23 +2326,44 @@ func actualizar_panel_ui():
 		btn.pressed.connect(accion_conexion)
 		return btn
 	
+	# --- IMPLEMENTACIÓN VISUAL POR EDIFICIO ---
 	for edif in d.edificios:
 		var is_obsolete = ReglasJuego.es_edificio_obsoleto(edif, celda_seleccionada, era_actual, city_grid)
-		var hbox_bldg = HBoxContainer.new()
-		hbox_bldg.alignment = BoxContainer.ALIGNMENT_BEGIN
-		hbox_bldg.add_theme_constant_override("separation", 8)
+		
+		var panel_bldg = PanelContainer.new()
+		var sb_bldg = StyleBoxFlat.new()
+		sb_bldg.bg_color = Color(0.15, 0.15, 0.18)
+		if is_obsolete:
+			sb_bldg.bg_color = Color(0.2, 0.2, 0.2)
+			sb_bldg.border_color = Color(0.4, 0.4, 0.4)
+			sb_bldg.set_border_width_all(1)
+		sb_bldg.set_corner_radius_all(6)
+		panel_bldg.add_theme_stylebox_override("panel", sb_bldg)
+		
+		var margin_bldg = MarginContainer.new()
+		margin_bldg.add_theme_constant_override("margin_left", 8)
+		margin_bldg.add_theme_constant_override("margin_right", 8)
+		margin_bldg.add_theme_constant_override("margin_top", 6)
+		margin_bldg.add_theme_constant_override("margin_bottom", 6)
+		
+		var hbox_bldg_main = HBoxContainer.new()
+		hbox_bldg_main.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		
+		var hbox_left = HBoxContainer.new()
+		hbox_left.alignment = BoxContainer.ALIGNMENT_BEGIN
+		hbox_left.add_theme_constant_override("separation", 8)
 		
 		if edif not in ["Palace", "Town Hall"]:
 			var edif_c = edif
 			var btn_del = crear_boton_borrar_estilizado.call(func(): _borrar_edificio_especifico(edif_c))
-			hbox_bldg.add_child(btn_del)
+			hbox_left.add_child(btn_del)
 		else:
 			var spacer = Control.new()
 			spacer.custom_minimum_size = Vector2(26, 0)
-			hbox_bldg.add_child(spacer)
+			hbox_left.add_child(spacer)
 			
 		var asset_name = edif
-		if ReglasJuego.es_edificio_muralla(edif): asset_name = "Defense"
+		if ReglasJuego.es_edificio_muralla(edif): asset_name = edif
 		elif edif == "Marvel" or Constantes.DATOS_EDIFICIOS.get(edif, {}).get("is_wonder", false):
 			asset_name = "wonder" if not ResourceLoader.exists(resolver_ruta_asset(asset_name)) else edif
 		
@@ -2174,43 +2374,113 @@ func actualizar_panel_ui():
 			tex_rect.custom_minimum_size = Vector2(24, 24)
 			tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-			hbox_bldg.add_child(tex_rect)
+			hbox_left.add_child(tex_rect)
 			
-		var lbl_name = RichTextLabel.new()
-		lbl_name.bbcode_enabled = true
-		lbl_name.fit_content = true
-		lbl_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var lbl_name = Label.new()
+		var nom_text = edif.to_upper()
+		if is_obsolete: nom_text += " (OBSOLETE)"
+		lbl_name.text = nom_text
+		if is_obsolete: lbl_name.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
+		lbl_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		hbox_left.add_child(lbl_name)
 		
-		var w_yield_str = ""
+		hbox_bldg_main.add_child(hbox_left)
+		
+		var spacer_mid = Control.new()
+		spacer_mid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		hbox_bldg_main.add_child(spacer_mid)
+		
+		var hbox_yields = HBoxContainer.new()
+		hbox_yields.alignment = BoxContainer.ALIGNMENT_END
+		hbox_yields.add_theme_constant_override("separation", 6)
+		
 		if not es_pincel:
+			var e_yields = {}
 			if Constantes.MARAVILLAS_NATURALES.has(edif):
-				var w_yields = Constantes.MARAVILLAS_NATURALES[edif].get("yields", {})
-				for wk in w_yields.keys():
-					if w_yields[wk] > 0:
-						var p = resolver_ruta_asset(obtener_nombre_asset_rendimiento(wk))
-						w_yield_str += str(w_yields[wk]) + ("[img=16x16]" + p + "[/img] " if ResourceLoader.exists(p) else "")
+				e_yields = Constantes.MARAVILLAS_NATURALES[edif].get("yields", {}).duplicate()
+			elif edif == "Palace":
+				e_yields["Food"] = 5 * era_mult
+				e_yields["Production"] = 5 * era_mult
+				if asentamiento_tiene_agua_dulce(celda_seleccionada): e_yields["Happiness"] = 5 * era_mult
+				var adj_palacio = calcular_adyacencia_palacio(celda_seleccionada)
+				if adj_palacio["Science"] > 0: e_yields["Science"] = adj_palacio["Science"] * era_mult
+				if adj_palacio["Culture"] > 0: e_yields["Culture"] = adj_palacio["Culture"] * era_mult
+			elif edif == "Town Hall":
+				e_yields["Food"] = 3 * era_mult
+				e_yields["Production"] = 3 * era_mult
+				var asent_t = "Town"
+				for asent in asentamientos:
+					if asent.grid.has(celda_seleccionada) or asent.centro == celda_seleccionada:
+						asent_t = asent.tipo
+						break
+				if (asent_t == "City" or asent_t == "Capital") and asentamiento_tiene_agua_dulce(celda_seleccionada):
+					e_yields["Happiness"] = 3 * era_mult
 			elif not ReglasJuego.es_edificio_muralla(edif):
-				var datos_edif = Constantes.DATOS_EDIFICIOS.get(edif, {})
-				var base = datos_edif.get("base", 0)
-				var rend = datos_edif.get("rendimiento", "")
-				var total_e = base + (ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif, era_actual, city_grid) if not datos_edif.get("is_generic", false) else 0)
+				var d_e = Constantes.DATOS_EDIFICIOS.get(edif, {})
+				var b_base = d_e.get("base", 0)
+				var b_ady = ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif, era_actual, city_grid) if not d_e.get("is_generic", false) else 0
+				var total_e = b_base + b_ady
 				if total_e > 0:
-					var p = resolver_ruta_asset(obtener_nombre_asset_rendimiento(rend))
-					w_yield_str += "(" + str(total_e) + ("[img=16x16]" + p + "[/img]" if ResourceLoader.exists(p) else "") + ")"
-		
-		var obs_tag = " [color=red](Obsolete)[/color]" if is_obsolete else ""
-		var bb_text = "[left]" + edif.to_upper() + " " + w_yield_str + obs_tag + "[/left]"
-		if ReglasJuego.es_edificio_muralla(edif): bb_text = "[left]" + edif.to_upper() + obs_tag + "[/left]"
-		lbl_name.text = bb_text
-		
-		var margin_rt = MarginContainer.new()
-		margin_rt.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		margin_rt.add_theme_constant_override("margin_top", 4)
-		margin_rt.add_child(lbl_name)
-		hbox_bldg.add_child(margin_rt)
-		vbox_bldgs.add_child(hbox_bldg)
+					e_yields[d_e.get("rendimiento", "")] = total_e
+					
+			for k in e_yields.keys():
+				if e_yields[k] > 0:
+					var p_panel = PanelContainer.new()
+					var p_sb = StyleBoxFlat.new()
+					p_sb.bg_color = Color(0.12, 0.12, 0.15)
+					p_sb.border_color = Color(0.4, 0.4, 0.45)
+					p_sb.set_border_width_all(2)
+					p_sb.set_corner_radius_all(6)
+					p_panel.add_theme_stylebox_override("panel", p_sb)
+					
+					var p_mar = MarginContainer.new()
+					p_mar.add_theme_constant_override("margin_left", 6)
+					p_mar.add_theme_constant_override("margin_right", 6)
+					p_mar.add_theme_constant_override("margin_top", 2)
+					p_mar.add_theme_constant_override("margin_bottom", 2)
+					
+					var p_hb = HBoxContainer.new()
+					p_hb.alignment = BoxContainer.ALIGNMENT_CENTER
+					p_hb.add_theme_constant_override("separation", 4)
+					
+					var l_val = Label.new()
+					l_val.text = str(e_yields[k])
+					l_val.add_theme_font_size_override("font_size", 13)
+					p_hb.add_child(l_val)
+					
+					var path_icon = resolver_ruta_asset(obtener_nombre_asset_rendimiento(k))
+					if ResourceLoader.exists(path_icon):
+						var t_icon = TextureRect.new()
+						t_icon.texture = load(path_icon)
+						t_icon.custom_minimum_size = Vector2(16, 16)
+						t_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+						t_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+						p_hb.add_child(t_icon)
+						
+					p_mar.add_child(p_hb)
+					p_panel.add_child(p_mar)
+					hbox_yields.add_child(p_panel)
+					
+		if hbox_yields.get_child_count() > 0:
+			hbox_bldg_main.add_child(hbox_yields)
+
+		margin_bldg.add_child(hbox_bldg_main)
+		panel_bldg.add_child(margin_bldg)
+		vbox_bldgs.add_child(panel_bldg)
 		
 	if d.get("mejora_tipo", "") != "":
+		var panel_mej = PanelContainer.new()
+		var sb_mej = StyleBoxFlat.new()
+		sb_mej.bg_color = Color(0.15, 0.15, 0.18)
+		sb_mej.set_corner_radius_all(6)
+		panel_mej.add_theme_stylebox_override("panel", sb_mej)
+		
+		var margin_mej = MarginContainer.new()
+		margin_mej.add_theme_constant_override("margin_left", 8)
+		margin_mej.add_theme_constant_override("margin_right", 8)
+		margin_mej.add_theme_constant_override("margin_top", 6)
+		margin_mej.add_theme_constant_override("margin_bottom", 6)
+		
 		var hbox_mej = HBoxContainer.new()
 		hbox_mej.alignment = BoxContainer.ALIGNMENT_BEGIN
 		hbox_mej.add_theme_constant_override("separation", 8)
@@ -2232,74 +2502,17 @@ func actualizar_panel_ui():
 		lbl_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		lbl_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		hbox_mej.add_child(lbl_name)
-		vbox_bldgs.add_child(hbox_mej)
 		
-	if d.ajeno:
+		margin_mej.add_child(hbox_mej)
+		panel_mej.add_child(margin_mej)
+		vbox_bldgs.add_child(panel_mej)
+		
+	if d.get("ajeno", false):
 		var lbl_ajeno = Label.new()
 		lbl_ajeno.text = "EXTERNAL CONTENT"
 		lbl_ajeno.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		lbl_ajeno.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
 		vbox_bldgs.add_child(lbl_ajeno)
-		
-	# --- LÓGICA DE EXPANSIÓN DINÁMICA DE MURALLAS (SOLO CELDAS URBANAS) ---
-	var muralla_era = ""
-	match era_actual:
-		"Antiquity": muralla_era = "Ancient Walls"
-		"Exploration": muralla_era = "Medieval Walls"
-		"Modern Age": muralla_era = "Defensive Fortifications"
-
-	var tiene_muralla = false
-	for e in d.get("edificios", []):
-		if ReglasJuego.es_edificio_muralla(e):
-			tiene_muralla = true
-			break
-
-	var mostrar_boton_muralla = false
-	if not tiene_muralla and muralla_era != "" and _es_celda_urbana(celda_seleccionada) and asentamientos.size() > 0 and asentamiento_activo_idx < asentamientos.size():
-		if celda_seleccionada == asent_centro:
-			# Inicialmente disponible en la celda central (siempre urbana)
-			mostrar_boton_muralla = true
-		else:
-			# Expansión adyacente: requiere que un vecino directo ya tenga la muralla construida
-			var tiene_vecino_con_muralla = false
-			for vec in HexMath.VECINOS_HEX:
-				var n = celda_seleccionada + vec
-				if city_grid.has(n):
-					for e in city_grid[n].get("edificios", []):
-						if ReglasJuego.es_edificio_muralla(e):
-							tiene_vecino_con_muralla = true
-							break
-				if tiene_vecino_con_muralla:
-					break
-			if tiene_vecino_con_muralla:
-				mostrar_boton_muralla = true
-
-	if mostrar_boton_muralla:
-		var d_muralla = Constantes.DATOS_EDIFICIOS.get(muralla_era, {})
-		var color_borde = Constantes.obtener_color_rendimiento(d_muralla.get("rendimiento", "Production"))
-		
-		var btn_add_wall = Button.new()
-		btn_add_wall.text = "🏰 Add " + muralla_era
-		btn_add_wall.custom_minimum_size = Vector2(0, 40)
-		
-		var sb_wall = StyleBoxFlat.new()
-		sb_wall.bg_color = Color(0.2, 0.2, 0.25)
-		sb_wall.border_color = color_borde
-		sb_wall.set_border_width_all(2)
-		sb_wall.set_corner_radius_all(6)
-		btn_add_wall.add_theme_stylebox_override("normal", sb_wall)
-		
-		var sb_wall_hover = sb_wall.duplicate()
-		sb_wall_hover.bg_color = Color(0.3, 0.3, 0.35)
-		btn_add_wall.add_theme_stylebox_override("hover", sb_wall_hover)
-		
-		btn_add_wall.pressed.connect(func():
-			GestorConstruccion.aplicar_edificio(self, muralla_era)
-			actualizar_panel_ui()
-		)
-		
-		vbox_bldgs.add_child(btn_add_wall)
-	# --- FIN LÓGICA DE EXPANSIÓN ---
 		
 	if vbox_bldgs.get_child_count() > 0: dyn_node.add_child(vbox_bldgs)
 		
@@ -2307,6 +2520,509 @@ func actualizar_panel_ui():
 	if btn_quitar_recurso:
 		btn_quitar_recurso.visible = not tiene_desarrollo and (d.get("recurso", "") != "") and (d.get("caracteristica", "") != "NATURAL_WONDER")
 		
+	# Actualizar el recuento flotante de mejoras permitidas
+	actualizar_panel_recuento_mejoras()
+
+func actualizar_panel_recuento_mejoras():
+	var canvas_mejoras = get_node_or_null("CanvasMejoras")
+	if not canvas_mejoras:
+		canvas_mejoras = CanvasLayer.new()
+		canvas_mejoras.name = "CanvasMejoras"
+		canvas_mejoras.layer = 5
+		add_child(canvas_mejoras)
+		
+	var panel = canvas_mejoras.get_node_or_null("PanelRecuentoMejoras")
+	if not panel:
+		panel = PanelContainer.new()
+		panel.name = "PanelRecuentoMejoras"
+		panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+		panel.offset_left = -315
+		panel.offset_right = -15
+		canvas_mejoras.add_child(panel)
+		
+	for c in panel.get_children(): c.queue_free()
+	
+	if asentamientos.size() == 0 or asentamiento_activo_idx >= asentamientos.size():
+		panel.visible = false
+		return
+		
+	if seccion_actual not in ["CONSTRUCCION", "EXTERNOS"]:
+		panel.visible = false
+		return
+		
+	panel.visible = true
+	
+	var vbox = VBoxContainer.new()
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", 6)
+	
+	var m_in = MarginContainer.new()
+	m_in.add_theme_constant_override("margin_left", 12)
+	m_in.add_theme_constant_override("margin_right", 12)
+	m_in.add_theme_constant_override("margin_top", 12)
+	m_in.add_theme_constant_override("margin_bottom", 12)
+	m_in.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	
+	var sb_panel = StyleBoxFlat.new()
+	sb_panel.bg_color = Color(0.12, 0.12, 0.16, 0.95)
+	sb_panel.border_color = Color(0.4, 0.6, 0.8)
+	sb_panel.set_border_width_all(2)
+	sb_panel.set_corner_radius_all(8)
+	panel.add_theme_stylebox_override("panel", sb_panel)
+	
+	# ==========================================================================
+	# 1. SECCIÓN SUPERIOR: DATOS DEL ASENTAMIENTO
+	# ==========================================================================
+	var asent = asentamientos[asentamiento_activo_idx]
+	var asent_centro = asent.centro
+	var asent_tipo = asent.tipo
+	
+	var hb_asent_head = HBoxContainer.new()
+	hb_asent_head.alignment = BoxContainer.ALIGNMENT_CENTER
+	hb_asent_head.add_theme_constant_override("separation", 8)
+	
+	var asent_icon_name = "town"
+	if asent.tipo == "Capital": asent_icon_name = "palace"
+	elif asent.tipo == "City": asent_icon_name = "settlement"
+	
+	var path_asent_icon = resolver_ruta_asset(asent_icon_name)
+	if not ResourceLoader.exists(path_asent_icon):
+		path_asent_icon = resolver_ruta_asset("town")
+		
+	var tex_asent = TextureRect.new()
+	if ResourceLoader.exists(path_asent_icon): tex_asent.texture = load(path_asent_icon)
+	tex_asent.custom_minimum_size = Vector2(24, 24)
+	tex_asent.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tex_asent.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	hb_asent_head.add_child(tex_asent)
+	
+	var lbl_asent_name = Label.new()
+	lbl_asent_name.text = asent.nombre.to_upper()
+	lbl_asent_name.add_theme_font_size_override("font_size", 16)
+	lbl_asent_name.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+	hb_asent_head.add_child(lbl_asent_name)
+	
+	vbox.add_child(hb_asent_head)
+	
+	var total_yields = {"Food": 0, "Production": 0, "Gold": 0, "Science": 0, "Culture": 0, "Happiness": 0, "Influence": 0}
+	var improved_resources = []
+	var warehouses_construidos = {}
+	
+	var celdas_asent = asent.get("grid", [])
+	if celdas_asent.size() == 0:
+		for coord in city_grid.keys():
+			if HexMath.dist_hex(coord, asent_centro) <= 3:
+				celdas_asent.append(coord)
+				
+	for coord in celdas_asent:
+		if not city_grid.has(coord): continue
+		var d_c = city_grid[coord]
+		
+		for edif in d_c.get("edificios", []):
+			warehouses_construidos[edif] = true
+		
+		var rec = d_c.get("recurso", "")
+		var mej = d_c.get("mejora_tipo", "")
+		if rec != "" and mej != "":
+			improved_resources.append(rec)
+			
+		var tiene_mejora = (mej != "")
+		var tiene_edificios = (d_c.get("edificios", []).size() > 0)
+		var es_maravilla = (d_c.get("caracteristica", "") == "NATURAL_WONDER" or d_c.get("terreno", "") == "NATURAL_WONDER")
+		
+		if tiene_mejora or tiene_edificios or es_maravilla:
+			var r_yield = ReglasJuego.calcular_rendimiento_celda(d_c.bioma, d_c.terreno, d_c.get("caracteristica", "NONE"), d_c.get("recurso", ""), d_c.get("rio", false), era_actual)
+			for k in r_yield.keys():
+				if total_yields.has(k): total_yields[k] += r_yield[k]
+			
+		var era_mult = obtener_multiplicador_era()
+		for edif in d_c.edificios:
+			if edif == "Palace":
+				total_yields["Food"] += 5 * era_mult
+				total_yields["Production"] += 5 * era_mult
+				if asentamiento_tiene_agua_dulce(coord): total_yields["Happiness"] += 5 * era_mult
+				var adj_palacio = calcular_adyacencia_palacio(coord)
+				total_yields["Science"] += adj_palacio["Science"] * era_mult
+				total_yields["Culture"] += adj_palacio["Culture"] * era_mult
+			elif edif == "Town Hall":
+				total_yields["Food"] += 3 * era_mult
+				total_yields["Production"] += 3 * era_mult
+				if (asent.tipo == "City" or asent.tipo == "Capital") and asentamiento_tiene_agua_dulce(coord):
+					total_yields["Happiness"] += 3 * era_mult
+			elif Constantes.DATOS_EDIFICIOS.has(edif) and not ReglasJuego.es_edificio_obsoleto(edif, coord, era_actual, city_grid):
+				var d_e = Constantes.DATOS_EDIFICIOS[edif]
+				var rend = d_e.get("rendimiento", "")
+				var base = d_e.get("base", 0)
+				var ady = ReglasJuego.calcular_bono_edificio(coord, edif, era_actual, city_grid) if not d_e.get("is_generic", false) else 0
+				if total_yields.has(rend): total_yields[rend] += base + ady
+			elif Constantes.MARAVILLAS_NATURALES.has(edif):
+				var w_yields = Constantes.MARAVILLAS_NATURALES[edif].get("yields", {})
+				for wk in w_yields.keys():
+					if total_yields.has(wk): total_yields[wk] += w_yields[wk]
+					
+	var active_yields = []
+	for yk in ["Food", "Production", "Gold", "Science", "Culture", "Happiness", "Influence"]:
+		if total_yields.get(yk, 0) > 0:
+			active_yields.append(yk)
+			
+	if active_yields.size() > 0:
+		var vbox_yields = VBoxContainer.new()
+		vbox_yields.alignment = BoxContainer.ALIGNMENT_CENTER
+		vbox_yields.add_theme_constant_override("separation", 3)
+		
+		var hb_y_row1 = HBoxContainer.new()
+		hb_y_row1.alignment = BoxContainer.ALIGNMENT_CENTER
+		hb_y_row1.add_theme_constant_override("separation", 8)
+		
+		var hb_y_row2 = HBoxContainer.new()
+		hb_y_row2.alignment = BoxContainer.ALIGNMENT_CENTER
+		hb_y_row2.add_theme_constant_override("separation", 8)
+		
+		for i in range(active_yields.size()):
+			var yk = active_yields[i]
+			var hb_y_item = HBoxContainer.new()
+			hb_y_item.alignment = BoxContainer.ALIGNMENT_CENTER
+			hb_y_item.add_theme_constant_override("separation", 2)
+			
+			var lbl_y_val = Label.new()
+			lbl_y_val.text = str(total_yields[yk])
+			lbl_y_val.add_theme_font_size_override("font_size", 13)
+			hb_y_item.add_child(lbl_y_val)
+			
+			var path_y_icon = resolver_ruta_asset(obtener_nombre_asset_rendimiento(yk))
+			if ResourceLoader.exists(path_y_icon):
+				var tex_y_icon = TextureRect.new()
+				tex_y_icon.texture = load(path_y_icon)
+				tex_y_icon.custom_minimum_size = Vector2(18, 18)
+				tex_y_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				tex_y_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				hb_y_item.add_child(tex_y_icon)
+				
+			if i < 4:
+				hb_y_row1.add_child(hb_y_item)
+			else:
+				hb_y_row2.add_child(hb_y_item)
+				
+		vbox_yields.add_child(hb_y_row1)
+		if hb_y_row2.get_child_count() > 0:
+			vbox_yields.add_child(hb_y_row2)
+		vbox.add_child(vbox_yields)
+	
+	if improved_resources.size() > 0:
+		var hb_res = HBoxContainer.new()
+		hb_res.alignment = BoxContainer.ALIGNMENT_CENTER
+		hb_res.add_theme_constant_override("separation", 6)
+		
+		for res_name in improved_resources:
+			var path_res = resolver_ruta_asset(res_name)
+			if ResourceLoader.exists(path_res):
+				var tex_res = TextureRect.new()
+				tex_res.texture = load(path_res)
+				tex_res.custom_minimum_size = Vector2(20, 20)
+				tex_res.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				tex_res.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				hb_res.add_child(tex_res)
+				
+		vbox.add_child(hb_res)
+		
+	vbox.add_child(HSeparator.new())
+	
+	# ==========================================================================
+	# 2. SECCIÓN IMPROVEMENTS
+	# ==========================================================================
+	var hb_head = HBoxContainer.new()
+	hb_head.alignment = BoxContainer.ALIGNMENT_CENTER
+	hb_head.add_theme_constant_override("separation", 8)
+	
+	var path_icon = resolver_ruta_asset("improvements")
+	var tex_left = TextureRect.new()
+	if ResourceLoader.exists(path_icon): tex_left.texture = load(path_icon)
+	tex_left.custom_minimum_size = Vector2(22, 22)
+	tex_left.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	hb_head.add_child(tex_left)
+	
+	var lbl_title = Label.new()
+	lbl_title.text = "IMPROVEMENTS"
+	lbl_title.add_theme_font_size_override("font_size", 16)
+	lbl_title.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
+	hb_head.add_child(lbl_title)
+	
+	var tex_right = TextureRect.new()
+	if ResourceLoader.exists(path_icon): tex_right.texture = load(path_icon)
+	tex_right.custom_minimum_size = Vector2(22, 22)
+	tex_right.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	hb_head.add_child(tex_right)
+	
+	vbox.add_child(hb_head)
+	vbox.add_child(HSeparator.new())
+	
+	var mejoras_permitidas = ["Farm", "Pasture", "Plantation", "Fishing Boat", "Camp", "Woodcutter", "Mine", "Quarry", "Clay Pit"]
+	var conteo_construidas = {}
+	var conteo_disponibles = {}
+	for m in mejoras_permitidas:
+		conteo_construidas[m] = 0
+		conteo_disponibles[m] = 0
+		
+	for coord in celdas_asent:
+		if not city_grid.has(coord): continue
+		var d_c = city_grid[coord]
+		
+		if d_c.get("ajeno", false): continue 
+		if d_c.get("caracteristica", "") == "NATURAL_WONDER" or d_c.get("terreno", "") == "NATURAL_WONDER": continue
+		if d_c.get("edificios", []).size() > 0: continue
+		
+		var mej_colocada = d_c.get("mejora_tipo", "")
+		if mej_colocada != "":
+			if mej_colocada in mejoras_permitidas:
+				conteo_construidas[mej_colocada] += 1
+			continue 
+			
+		var recurso_celda = d_c.get("recurso", "")
+		for mej_nombre in mejoras_permitidas:
+			if recurso_celda != "" and not es_mejora_compatible_con_recurso(mej_nombre, recurso_celda, era_actual):
+				continue
+			
+			if ReglasJuego.es_mejora_valida(coord, mej_nombre, asent_centro, city_grid, era_actual, civ_actual, asent_tipo):
+				conteo_disponibles[mej_nombre] += 1
+				
+	var hb_imp_headers = HBoxContainer.new()
+	hb_imp_headers.alignment = BoxContainer.ALIGNMENT_BEGIN
+	hb_imp_headers.add_theme_constant_override("separation", 8)
+	
+	var lbl_h_dummy = Label.new()
+	lbl_h_dummy.custom_minimum_size = Vector2(95, 0)
+	lbl_h_dummy.text = ""
+	hb_imp_headers.add_child(lbl_h_dummy)
+	
+	for h_text in ["Disp", "Const", "Sum"]:
+		var lbl_col = Label.new()
+		lbl_col.text = h_text
+		lbl_col.custom_minimum_size = Vector2(40, 0)
+		lbl_col.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_col.add_theme_font_size_override("font_size", 11)
+		lbl_col.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+		hb_imp_headers.add_child(lbl_col)
+	vbox.add_child(hb_imp_headers)
+	
+	var count_shown = 0
+	var grid = GridContainer.new()
+	grid.columns = 1
+	grid.add_theme_constant_override("v_separation", 2)
+	
+	for i in range(mejoras_permitidas.size()):
+		var mej_nombre = mejoras_permitidas[i]
+		var disp = conteo_disponibles[mej_nombre]
+		var constr = conteo_construidas[mej_nombre]
+		var suma = disp + constr
+		
+		if suma > 0:
+			count_shown += 1
+			var hb_m = HBoxContainer.new()
+			hb_m.alignment = BoxContainer.ALIGNMENT_BEGIN
+			hb_m.add_theme_constant_override("separation", 8)
+			
+			var path_m = resolver_ruta_asset(mej_nombre)
+			var tex_m = TextureRect.new()
+			if ResourceLoader.exists(path_m): tex_m.texture = load(path_m)
+			tex_m.custom_minimum_size = Vector2(20, 20)
+			tex_m.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tex_m.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			hb_m.add_child(tex_m)
+			
+			var lbl_m = Label.new()
+			lbl_m.text = mej_nombre
+			lbl_m.custom_minimum_size = Vector2(95, 0)
+			lbl_m.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			lbl_m.add_theme_font_size_override("font_size", 13)
+			hb_m.add_child(lbl_m)
+			
+			var color_contador = Color(0.5, 1.0, 0.5) if i < 4 else Color(1.0, 0.4, 0.4)
+			
+			for val in [disp, constr, suma]:
+				var lbl_val = Label.new()
+				lbl_val.text = str(val)
+				lbl_val.custom_minimum_size = Vector2(40, 0)
+				lbl_val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				lbl_val.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+				lbl_val.add_theme_color_override("font_color", color_contador)
+				lbl_val.add_theme_font_size_override("font_size", 13)
+				hb_m.add_child(lbl_val)
+				
+			grid.add_child(hb_m)
+			
+	if count_shown > 0:
+		vbox.add_child(grid)
+	else:
+		var lbl_none = Label.new()
+		lbl_none.text = "No available improvements"
+		lbl_none.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_none.add_theme_font_size_override("font_size", 13)
+		lbl_none.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		vbox.add_child(lbl_none)
+		
+	# ==========================================================================
+	# 3. SECCIÓN WAREHOUSE
+	# ==========================================================================
+	var warehouse_targets = {
+		"Granary": ["Farm", "Pasture", "Plantation"],
+		"Fishing Quay": ["Fishing Boat"],
+		"Saw Pit": ["Camp", "Woodcutter"],
+		"Brickyard": ["Mine", "Quarry", "Clay Pit"],
+		"Gristmill": ["Farm", "Pasture", "Plantation"],
+		"Stonecutter": ["Mine", "Quarry"],
+		"Sawmill": ["Camp", "Woodcutter"],
+		"Grocer": ["Farm", "Pasture", "Plantation", "Fishing Boat", "Camp"],
+		"Ironworks": ["Mine", "Quarry", "Clay Pit", "Woodcutter"]
+	}
+	
+	var warehouse_yields = {
+		"Granary": "food",
+		"Fishing Quay": "food",
+		"Saw Pit": "production",
+		"Brickyard": "production",
+		"Gristmill": "food",
+		"Stonecutter": "production",
+		"Sawmill": "production",
+		"Grocer": "food",
+		"Ironworks": "production"
+	}
+	
+	var order_warehouses = [
+		"Granary", "Fishing Quay", "Saw Pit", "Brickyard",
+		"Gristmill", "Stonecutter", "Sawmill",
+		"Grocer", "Ironworks"
+	]
+	
+	var grid_wh = GridContainer.new()
+	grid_wh.columns = 1
+	grid_wh.add_theme_constant_override("v_separation", 2)
+	var count_wh_shown = 0
+	
+	for idx in range(order_warehouses.size()):
+		var wh = order_warehouses[idx]
+		var boost_built = 0
+		var boost_available = 0
+		
+		if warehouse_targets.has(wh):
+			for target in warehouse_targets[wh]:
+				boost_built += conteo_construidas.get(target, 0)
+				boost_available += conteo_disponibles.get(target, 0)
+				
+		var is_warehouse_built = warehouses_construidos.has(wh)
+		var total_potential = boost_built + boost_available
+		
+		if total_potential > 0:
+			count_wh_shown += 1
+			var hb_w = HBoxContainer.new()
+			hb_w.alignment = BoxContainer.ALIGNMENT_BEGIN
+			hb_w.add_theme_constant_override("separation", 8)
+			
+			var path_w = resolver_ruta_asset(wh)
+			var tex_w = TextureRect.new()
+			if ResourceLoader.exists(path_w): tex_w.texture = load(path_w)
+			tex_w.custom_minimum_size = Vector2(20, 20)
+			tex_w.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tex_w.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			hb_w.add_child(tex_w)
+			
+			var lbl_w = Label.new()
+			lbl_w.text = wh
+			lbl_w.custom_minimum_size = Vector2(95, 0)
+			lbl_w.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			lbl_w.add_theme_font_size_override("font_size", 13)
+			hb_w.add_child(lbl_w)
+			
+			var yield_type = warehouse_yields.get(wh, "food")
+			var path_yield = resolver_ruta_asset(yield_type)
+			
+			var hb_col1 = HBoxContainer.new()
+			hb_col1.alignment = BoxContainer.ALIGNMENT_CENTER
+			hb_col1.add_theme_constant_override("separation", 2)
+			hb_col1.custom_minimum_size = Vector2(40, 0)
+			
+			if is_warehouse_built:
+				var lbl_c1 = Label.new()
+				lbl_c1.text = str(boost_built)
+				lbl_c1.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+				lbl_c1.add_theme_font_size_override("font_size", 13)
+				hb_col1.add_child(lbl_c1)
+				if ResourceLoader.exists(path_yield):
+					var tex_y1 = TextureRect.new()
+					tex_y1.texture = load(path_yield)
+					tex_y1.custom_minimum_size = Vector2(16, 16)
+					tex_y1.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+					tex_y1.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+					hb_col1.add_child(tex_y1)
+			else:
+				var lbl_dash = Label.new()
+				lbl_dash.text = "-"
+				lbl_dash.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				lbl_dash.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+				hb_col1.add_child(lbl_dash)
+			hb_w.add_child(hb_col1)
+			
+			var hb_col2 = HBoxContainer.new()
+			hb_col2.alignment = BoxContainer.ALIGNMENT_CENTER
+			hb_col2.add_theme_constant_override("separation", 2)
+			hb_col2.custom_minimum_size = Vector2(40, 0)
+			
+			var lbl_c2 = Label.new()
+			lbl_c2.text = str(boost_available)
+			lbl_c2.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+			lbl_c2.add_theme_font_size_override("font_size", 13)
+			hb_col2.add_child(lbl_c2)
+			if ResourceLoader.exists(path_yield):
+				var tex_y2 = TextureRect.new()
+				tex_y2.texture = load(path_yield)
+				tex_y2.custom_minimum_size = Vector2(16, 16)
+				tex_y2.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				tex_y2.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				hb_col2.add_child(tex_y2)
+			hb_w.add_child(hb_col2)
+			
+			grid_wh.add_child(hb_w)
+			
+		if idx == 3 or idx == 6:
+			grid_wh.add_child(HSeparator.new())
+			
+	if count_wh_shown > 0:
+		vbox.add_child(HSeparator.new())
+		
+		var hb_head_wh = HBoxContainer.new()
+		hb_head_wh.alignment = BoxContainer.ALIGNMENT_CENTER
+		hb_head_wh.add_theme_constant_override("separation", 8)
+		
+		var path_icon_wh = resolver_ruta_asset("warehouse")
+		var tex_l_wh = TextureRect.new()
+		if ResourceLoader.exists(path_icon_wh): tex_l_wh.texture = load(path_icon_wh)
+		tex_l_wh.custom_minimum_size = Vector2(20, 20)
+		tex_l_wh.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		hb_head_wh.add_child(tex_l_wh)
+		
+		var lbl_title_wh = Label.new()
+		lbl_title_wh.text = "WAREHOUSE"
+		lbl_title_wh.add_theme_font_size_override("font_size", 16)
+		lbl_title_wh.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
+		hb_head_wh.add_child(lbl_title_wh)
+		
+		var tex_r_wh = TextureRect.new()
+		if ResourceLoader.exists(path_icon_wh): tex_r_wh.texture = load(path_icon_wh)
+		tex_r_wh.custom_minimum_size = Vector2(20, 20)
+		tex_r_wh.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		hb_head_wh.add_child(tex_r_wh)
+		
+		vbox.add_child(hb_head_wh)
+		vbox.add_child(HSeparator.new())
+		vbox.add_child(grid_wh)
+		
+	m_in.add_child(vbox)
+	panel.add_child(m_in)
+	
+	# Ajuste automático de altura basado en el contenido real para centrar verticalmente sin espacio vacío
+	var content_height = panel.get_combined_minimum_size().y
+	panel.offset_top = -content_height * 0.5
+	panel.offset_bottom = content_height * 0.5
+
 # ==============================================================================
 # FUNCIONES DIBUJO E INPUTS
 # ==============================================================================
@@ -2469,8 +3185,22 @@ func _draw() -> void:
 		var puntos = HexMath.obtener_puntos_hex(centro, radio_hex, 1.0)
 		draw_colored_polygon(puntos, color_base)
 		
-		var color_borde = Color.RED if datos.ajeno else Color(0.1, 0.1, 0.1, 0.3)
-		var grosor_borde = 4.0 if datos.ajeno else 1.5
+		# --- CORRECCIÓN MAPA GRIS PARA OBSOLETOS ---
+		var tiene_obsoleto = false
+		for e in datos.edificios:
+			if ReglasJuego.es_edificio_obsoleto(e, coord, era_actual, city_grid):
+				tiene_obsoleto = true
+				break
+		
+		var color_borde = Color(0.1, 0.1, 0.1, 0.3)
+		var grosor_borde = 1.5
+		if datos.get("ajeno", false):
+			color_borde = Color.RED
+			grosor_borde = 4.0
+		elif tiene_obsoleto:
+			color_borde = Color(0.6, 0.6, 0.6, 0.8)
+			grosor_borde = 3.5
+			
 		draw_polyline(puntos + PackedVector2Array([puntos[0]]), color_borde, grosor_borde)
 
 	for coord in city_grid.keys():
@@ -2593,7 +3323,7 @@ func actualizar_icono_celda(coord: Vector2i):
 			
 	if edificios_visibles.size() > 0:
 		var num_edif = edificios_visibles.size()
-		var size_edif = 36.0 if num_edif == 1 else 26.0
+		var size_edif = 36.0 if num_edif <= 2 else 26.0
 		var cols = min(num_edif, 2)
 		var rows = int(ceil(float(num_edif) / 2.0))
 		var h_sep = 4.0
@@ -2638,7 +3368,7 @@ func actualizar_icono_celda(coord: Vector2i):
 	elif datos.mejora_tipo != "":
 		datos.nodo_icono.columns = 1
 		var ancho = 36.0
-		if cache_puentes_urbanos.has(coord) and not datos.ajeno:
+		if cache_puentes_urbanos.has(coord) and not datos.get("ajeno", false):
 			datos.nodo_icono.columns = 2
 			ancho = 64.0
 			
@@ -2650,10 +3380,10 @@ func actualizar_icono_celda(coord: Vector2i):
 			if is_instance_valid(datos.nodo_recurso):
 				datos.nodo_recurso.position = centro_px - Vector2(24, radio_hex * 0.75)
 		
-		if cache_puentes_urbanos.has(coord) and not datos.ajeno:
+		if cache_puentes_urbanos.has(coord) and not datos.get("ajeno", false):
 			anadir_elemento_visual.call(datos.nodo_icono, "warning", "⚠️", 24.0, true)
 			
-	elif datos.ajeno:
+	elif datos.get("ajeno", false):
 		datos.nodo_icono.columns = 1
 		datos.nodo_icono.custom_minimum_size = Vector2(36, 36)
 		datos.nodo_icono.position = centro_px - Vector2(18, 18)
@@ -2693,8 +3423,15 @@ func actualizar_icono_celda(coord: Vector2i):
 			var iconos_agregados = {}
 			var lista_sug_validas = []
 			for sug in sugerencias_cache[coord]:
-				var d_sug = Constantes.DATOS_EDIFICIOS[sug.edificio]
-				var asset_sug = obtener_nombre_asset_rendimiento(d_sug.get("rendimiento", ""))
+				var d_sug = Constantes.DATOS_EDIFICIOS.get(sug.edificio, {})
+				var asset_sug = ""
+				
+				# Las maravillas y los almacenes utilizan el icono "wonder" para resaltarse en el mapa
+				if d_sug.get("is_wonder", false) or d_sug.get("tipo", "") == "Warehouse":
+					asset_sug = "wonder"
+				else:
+					asset_sug = obtener_nombre_asset_rendimiento(d_sug.get("rendimiento", ""))
+					
 				if not iconos_agregados.has(asset_sug) and asset_sug != "":
 					lista_sug_validas.append(asset_sug)
 					iconos_agregados[asset_sug] = true
@@ -2722,6 +3459,7 @@ func actualizar_icono_celda(coord: Vector2i):
 func actualizar_iconos_todos():
 	cache_puentes_urbanos = _calcular_celdas_puente_requeridas()
 	for coord in city_grid.keys(): actualizar_icono_celda(coord)
+	actualizar_panel_estadisticas()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -2734,7 +3472,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			actualizar_panel_construccion()
 			actualizar_panel_externos()
 			actualizar_visibilidad_boton_externos()
-			actualizar_visibilidad_boton_construccion() # <--- Llamada añadida aquí
+			actualizar_visibilidad_boton_construccion()
 			actualizar_panel_ui()
 			queue_redraw()
 			
@@ -2766,14 +3504,12 @@ func mostrar_pantalla_partidas_guardadas():
 	lbl_info.visible = false
 	for c in dyn_node.get_children(): c.queue_free()
 	
-	# Título principal del panel lateral
 	var lbl_titulo = Label.new()
 	lbl_titulo.text = "HEX CITY BUILDER"
 	lbl_titulo.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lbl_titulo.add_theme_font_size_override("font_size", 20)
 	dyn_node.add_child(lbl_titulo)
 	
-	# Botón de New Game
 	var btn_new = Button.new()
 	btn_new.text = "➕ New Game"
 	btn_new.custom_minimum_size = Vector2(0, 48)
@@ -2788,8 +3524,7 @@ func mostrar_pantalla_partidas_guardadas():
 	
 	btn_new.pressed.connect(func():
 		_controlar_botones_navegacion(true)
-		GestorAsentamientos.iniciar_nueva_partida(self, "Antiquity", Constantes.TODAS_LAS_CIVS[0])
-		cambiar_seccion("ASENTAMIENTOS")
+		mostrar_dialogo_lideres_inicio(true)
 	)
 	dyn_node.add_child(btn_new)
 	
@@ -2840,7 +3575,6 @@ func mostrar_pantalla_partidas_guardadas():
 			hbox_row.add_theme_constant_override("separation", 10)
 			btn_save.add_child(hbox_row)
 			
-			# 1. Icono del Líder
 			var lider_nombre = save_data.get("lider_actual", "")
 			if lider_nombre != "":
 				var path_lider = resolver_ruta_asset(lider_nombre)
@@ -2852,7 +3586,6 @@ func mostrar_pantalla_partidas_guardadas():
 					tex_lider.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 					hbox_row.add_child(tex_lider)
 			
-			# 2. Icono de la Civilización
 			var civ_nombre = save_data.get("civ_actual", "")
 			if civ_nombre != "":
 				var path_civ = resolver_ruta_asset(civ_nombre)
@@ -2864,7 +3597,6 @@ func mostrar_pantalla_partidas_guardadas():
 					tex_civ.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 					hbox_row.add_child(tex_civ)
 			
-			# 3. Nombre de la Partida
 			var lbl_name = Label.new()
 			lbl_name.text = save_name
 			lbl_name.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -2884,3 +3616,124 @@ func _controlar_botones_navegacion(mostrar: bool):
 	if btn_menu_maravillas: btn_menu_maravillas.visible = mostrar
 	if btn_modo_construccion: btn_modo_construccion.visible = mostrar
 	if btn_modo_externos: btn_modo_externos.visible = mostrar
+
+func _crear_panel_estadisticas():
+	var canvas_hud = CanvasLayer.new()
+	canvas_hud.layer = 5
+	
+	panel_estadisticas = MarginContainer.new()
+	panel_estadisticas.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	panel_estadisticas.add_theme_constant_override("margin_top", 16)
+	panel_estadisticas.add_theme_constant_override("margin_right", 16)
+	
+	var fondo_panel = PanelContainer.new()
+	var sb = StyleBoxFlat.new()
+	sb.bg_color = Color(0.12, 0.12, 0.15, 0.9)
+	sb.border_color = Color(0.35, 0.35, 0.4)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(8)
+	fondo_panel.add_theme_stylebox_override("panel", sb)
+	
+	var margen_interno = MarginContainer.new()
+	margen_interno.add_theme_constant_override("margin_left", 14)
+	margen_interno.add_theme_constant_override("margin_right", 14)
+	margen_interno.add_theme_constant_override("margin_top", 12)
+	margen_interno.add_theme_constant_override("margin_bottom", 12)
+	
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	
+	var lbl_title = Label.new()
+	lbl_title.text = "SETTLEMENT CONTENT"
+	lbl_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl_title.add_theme_font_size_override("font_size", 13)
+	lbl_title.add_theme_color_override("font_color", Color(0.9, 0.7, 0.3))
+	vbox.add_child(lbl_title)
+	
+	vbox.add_child(HSeparator.new())
+	
+	grid_estadisticas = GridContainer.new()
+	grid_estadisticas.columns = 2
+	grid_estadisticas.add_theme_constant_override("h_separation", 16)
+	grid_estadisticas.add_theme_constant_override("v_separation", 6)
+	vbox.add_child(grid_estadisticas)
+	
+	margen_interno.add_child(vbox)
+	fondo_panel.add_child(margen_interno)
+	panel_estadisticas.add_child(fondo_panel)
+	
+	canvas_hud.add_child(panel_estadisticas)
+	add_child(canvas_hud)
+
+func actualizar_panel_estadisticas():
+	if not grid_estadisticas: return
+	for c in grid_estadisticas.get_children(): c.queue_free()
+	
+	if asentamientos.size() == 0 or asentamiento_activo_idx >= asentamientos.size():
+		panel_estadisticas.visible = false
+		return
+		
+	# Solo mostrar si no estamos gestionando imperios globalmente
+	panel_estadisticas.visible = (seccion_actual != "ASENTAMIENTOS" and seccion_actual != "PINCEL")
+	
+	var asent = asentamientos[asentamiento_activo_idx]
+	var mejoras = {}
+	var edificios = {}
+	
+	for coord in asent.grid:
+		if city_grid.has(coord):
+			var d = city_grid[coord]
+			if d.mejora_tipo != "":
+				mejoras[d.mejora_tipo] = mejoras.get(d.mejora_tipo, 0) + 1
+			for e in d.edificios:
+				if not ReglasJuego.es_edificio_muralla(e):
+					edificios[e] = edificios.get(e, 0) + 1
+					
+	var crear_item = func(nombre: String, cant: int):
+		var hb = HBoxContainer.new()
+		hb.alignment = BoxContainer.ALIGNMENT_BEGIN
+		hb.add_theme_constant_override("separation", 6)
+		
+		# Intentar obtener Asset (si no, icono genérico)
+		var p = resolver_ruta_asset(nombre)
+		if ResourceLoader.exists(p):
+			var tex_rect = TextureRect.new()
+			tex_rect.texture = load(p)
+			tex_rect.custom_minimum_size = Vector2(18, 18)
+			tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			hb.add_child(tex_rect) 
+		else:
+			var l_dot = Label.new()
+			l_dot.text = "•"
+			hb.add_child(l_dot)
+			
+		var l = Label.new()
+		var trunc_name = nombre.capitalize() if nombre.length() <= 15 else nombre.substr(0, 13) + ".."
+		l.text = trunc_name + " x" + str(cant)
+		l.add_theme_font_size_override("font_size", 12)
+		hb.add_child(l)
+		grid_estadisticas.add_child(hb)
+		
+	var arr_m = mejoras.keys()
+	arr_m.sort()
+	for m in arr_m: crear_item.call(m, mejoras[m])
+	
+	var arr_e = edificios.keys()
+	arr_e.sort()
+	for e in arr_e: crear_item.call(e, edificios[e])
+
+func es_edificio_valido(coord, edificio_nombre, grid_celdas, era):
+	if not grid_celdas.has(coord): return false
+	var d_c = grid_celdas[coord]
+	
+	# PROHIBICIÓN TOTAL: Las maravillas naturales no admiten edificios ni maravillas normales
+	var es_maravilla_natural = (d_c.get("caracteristica", "") == "NATURAL_WONDER" or d_c.get("terreno", "") == "NATURAL_WONDER")
+	if es_maravilla_natural:
+		return false
+		
+	# Comprobaciones estándar de edificios
+	if not "DATOS_EDIFICIOS" in Constantes or not Constantes.DATOS_EDIFICIOS.has(edificio_nombre):
+		return false
+		
+	return true

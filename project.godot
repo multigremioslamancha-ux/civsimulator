@@ -20,8 +20,12 @@ config/icon="res://icon.svg"
 GestorArchivos="*uid://b3bgmwca1mepr"
 GestorConstruccion="*uid://dy74edndngtey"
 GestorInterfaz="*uid://dksaay5wn7w8"
-ReglasJuego="*uid://cwi3d8hkxblmc"
 HexMath="*uid://bhjqlfaltx6cl"
+GestorAsentamientos="*uid://df1xf105sh546"
+GestorDialogos="*uid://cqxc4o2vda2ui"
+GestorGuardado="*uid://cvalm35xd44jw"
+GestorPincel="*uid://dx2jtgxxssonv"
+ReglasJuego="*uid://cwi3d8hkxblmc"
 
 [display]
 

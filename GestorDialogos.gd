@@ -1,7 +1,6 @@
 extends Node
-class_name GestorDialogos
 
-static func mostrar_dialogo_renombrar(main: Node2D, idx: int):
+func mostrar_dialogo_renombrar(main: Node2D, idx: int):
 	var dialog = AcceptDialog.new()
 	dialog.title = "Rename Settlement"
 	var vbox = VBoxContainer.new()
@@ -26,7 +25,7 @@ static func mostrar_dialogo_renombrar(main: Node2D, idx: int):
 	main.get_tree().root.add_child(dialog)
 	dialog.popup_centered(Vector2(300, 150))
 
-static func mostrar_dialogo_borrar_asentamiento(main: Node2D, idx: int):
+func mostrar_dialogo_borrar_asentamiento(main: Node2D, idx: int):
 	var dialog = ConfirmationDialog.new()
 	dialog.title = "Delete Settlement"
 	dialog.dialog_text = "¿Are you sure you want to delete '" + main.asentamientos[idx].nombre + "' and all its terrain?"
@@ -37,7 +36,7 @@ static func mostrar_dialogo_borrar_asentamiento(main: Node2D, idx: int):
 	main.get_tree().root.add_child(dialog)
 	dialog.popup_centered(Vector2(320, 150))
 
-static func mostrar_dialogo_lideres_inicio(main: Node2D, iniciar_nueva_partida_despues: bool = true):
+func mostrar_dialogo_lideres_inicio(main: Node2D, iniciar_nueva_partida_despues: bool = true):
 	var dialog = AcceptDialog.new()
 	dialog.title = "Select Leader"
 	var vbox = VBoxContainer.new()
@@ -127,7 +126,7 @@ static func mostrar_dialogo_lideres_inicio(main: Node2D, iniciar_nueva_partida_d
 	main.get_tree().root.add_child(dialog)
 	dialog.popup_centered(Vector2(620, 380))
 
-static func mostrar_dialogo_nueva_partida(main: Node2D):
+func mostrar_dialogo_nueva_partida(main: Node2D):
 	var dialog = AcceptDialog.new()
 	dialog.title = "Start New Game"
 	var vbox = VBoxContainer.new()
@@ -210,7 +209,7 @@ static func mostrar_dialogo_nueva_partida(main: Node2D):
 	main.get_tree().root.add_child(dialog)
 	dialog.popup_centered(Vector2(620, 460))
 
-static func mostrar_dialogo_sincretismo(main: Node2D):
+func mostrar_dialogo_sincretismo(main: Node2D):
 	var dialog = AcceptDialog.new()
 	dialog.title = "Select Syncretism"
 	var vbox = VBoxContainer.new()
@@ -235,7 +234,7 @@ static func mostrar_dialogo_sincretismo(main: Node2D):
 	main.get_tree().root.add_child(dialog)
 	dialog.popup_centered(Vector2(700, 480))
 
-static func mostrar_dialogo_confirmar_siguiente_era(main: Node2D):
+func mostrar_dialogo_confirmar_siguiente_era(main: Node2D):
 	var siguiente = ""
 	if main.era_actual == "Antiquity": siguiente = "Exploration"
 	elif main.era_actual == "Exploration": siguiente = "Modern Age"

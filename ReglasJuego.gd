@@ -97,8 +97,9 @@ func calcular_rendimiento_celda(bioma: String, terreno: String, caracteristica: 
 
 	return rendimiento
 
+# Se eliminan los edificios de Fortificación estándar, limitando Murallas a las estructurales.
 func es_edificio_muralla(nombre: String) -> bool:
-	return nombre in ["Ancient Walls", "Medieval Walls", "Defensive Fortifications", "Great Wall", "Hidden Fortress", "Ming Great Wall", "Citadel", "Bailey", "Motte"]
+	return nombre in ["Ancient Walls", "Medieval Walls", "Modern Walls"]
 
 func es_edificio_obsoleto(nombre: String, coord: Vector2i, era_actual: String, city_grid: Dictionary) -> bool:
 	if city_grid.has(coord) and city_grid[coord].get("edificios_dorados", []).has(nombre): return false
@@ -280,13 +281,20 @@ func es_ubicacion_valida_para_edificio(coord: Vector2i, edificio_nombre: String,
 	if d.get("tipo", "") == "Unique" and tipo_asentamiento == "Town": return false
 	if d.has("civ") and d.civ != civ_actual: return false
 	
+	var is_full_tile = d.get("full_tile", false) or edificio_nombre in ["Aerodrome", "Rail Station"]
+	if is_full_tile:
+		var tiene_no_obsoleto = false
+		for e in datos_celda.edificios:
+			if not es_edificio_obsoleto(e, coord, era_actual, city_grid): tiene_no_obsoleto = true
+		if tiene_no_obsoleto: return false
+	
 	var edificios_actuales = datos_celda.get("edificios", [])
 	var es_centro = edificios_actuales.has("Palace") or edificios_actuales.has("Town Hall")
 
-	# Contabilizar qué hay en la celda
 	var normales = 0
 	var tiene_wonder = false
 	var tiene_muralla = false
+	var extraibles = 0
 
 	for e in edificios_actuales:
 		if es_edificio_muralla(e):
@@ -295,17 +303,15 @@ func es_ubicacion_valida_para_edificio(coord: Vector2i, edificio_nombre: String,
 			tiene_wonder = true
 		elif e not in ["Palace", "Town Hall"]:
 			normales += 1
+			var e_d = Constantes.DATOS_EDIFICIOS.get(e, {})
+			if e_d.get("tipo", "") != "Warehouse" and not e_d.has("civ"):
+				extraibles += 1
 
-	# --- VALIDACIONES SEGÚN TIPO (Muralla vs Normal/Wonder) ---
 	if es_nueva_muralla:
 		if tiene_muralla: return false
-		
-		# Solo en celdas URBANAS (1 o 2 edificios, maravilla, o el centro del asentamiento)
 		var is_urban = normales > 0 or tiene_wonder or es_centro
 		if not is_urban: return false
 
-		# REGLA DE ADYACENCIA UNIVERSAL PARA MURALLAS:
-		# Si no es el centro (dist > 0), debe tocar al menos a un vecino adyacente que ya tenga muralla.
 		var dist = HexMath.dist_hex(coord, asent_centro)
 		if dist > 0:
 			var tiene_vecino_con_muralla = false
@@ -324,22 +330,18 @@ func es_ubicacion_valida_para_edificio(coord: Vector2i, edificio_nombre: String,
 		if es_nueva_wonder:
 			if tiene_wonder or normales > 0 or es_centro: return false
 		else:
-			# Edificios normales: 2 máximo (1 máximo si es el centro)
 			var max_normales = 1 if es_centro else 2
-			if tiene_wonder or normales >= max_normales: return false
+			if tiene_wonder: return false
+			if normales >= max_normales and extraibles == 0: return false
 			
-	# Los recursos bloquean los edificios normales/wonders (pero no las murallas urbanas)
 	if not es_nueva_muralla and es_recurso:
 		return false
 		
-	# --- EXENCIONES PARA LAS MURALLAS ---
 	if not es_nueva_muralla:
 		if d.get("no_pair", false) and (normales > 0 or tiene_wonder): return false
-		
 		if d.has("max_one") and d.max_one:
 			for c_datos in city_grid.values():
 				if c_datos.edificios.has(edificio_nombre): return false
-				
 		if d.has("no_adj_same") and d.no_adj_same:
 			for vec in HexMath.VECINOS_HEX:
 				var n = coord + vec
