@@ -1,6 +1,7 @@
 extends Node2D
 
 # ==============================================================================
+
 # CIV7 - ARCHIVO PRINCIPAL UNIFICADO
 # ------------------------------------------------------------------------------
 # Este archivo contiene TODA la logica del juego y de la interfaz:
@@ -8,6 +9,7 @@ extends Node2D
 #      los paneles, la entrada, el dibujo del mapa y las pantallas.
 #   2) Los MODULOS INTERNOS (clases anidadas al final del archivo), que antes
 #      eran scripts sueltos cargados como autoloads:
+#         MaravillasNaturales-> motor de reglas de maravillas naturales
 #         HexMath            -> matematicas de hexagonos
 #         ReglasJuego        -> reglas/validaciones puras del juego
 #         GestorPincel       -> edicion de terreno (bioma, recurso, rio...)
@@ -338,7 +340,15 @@ func asentamiento_tiene_agua_dulce(coord_centro: Vector2i) -> bool:
 			var d_n = city_grid[n]
 			if d_n.get("rio", false) or d_n.terreno == "LAKE" or d_n.terreno == "NAVIGABLE_RIVER":
 				return true
-	return false
+	# Gullfoss / Iguazú Falls otorgan agua dulce al asentamiento cuando su
+	# celda de maravilla está activada con "Expedition Base".
+	return MaravillasNaturales.otorga_agua_dulce(city_grid)
+
+# Punto central de consulta del bono de producción de caballería.
+# Seongsan Ilchulbong aporta +20% por cada celda activada.
+func multiplicador_produccion_caballeria() -> float:
+	return MaravillasNaturales.multiplicador_produccion_caballeria(city_grid)
+
 
 func calcular_adyacencia_palacio(coord_centro: Vector2i) -> Dictionary:
 	var bonus = {"Science": 0, "Culture": 0}
@@ -436,10 +446,15 @@ func es_celda_externos_valida() -> bool:
 
 func actualizar_visibilidad_boton_externos():
 	if btn_modo_externos:
+		# Regla general: el botón de la sección activa permanece oculto.
+		if seccion_actual == "EXTERNOS":
+			var sigue_valida = es_celda_externos_valida()
+			btn_modo_externos.visible = false
+			if not sigue_valida:
+				cambiar_seccion("CONSTRUCCION")
+			return
 		var visible_val = es_celda_externos_valida()
 		btn_modo_externos.visible = visible_val
-		if not visible_val and seccion_actual == "EXTERNOS":
-			cambiar_seccion("CONSTRUCCION")
 
 func resolver_ruta_asset(item_name: String) -> String:
 	var map = {
@@ -737,76 +752,12 @@ func actualizar_botones_recursos_ui():
 	var terreno_actual = datos_celda.terreno
 	var carac_actual = datos_celda.get("caracteristica", "NONE")
 	
-	if es_centro or terreno_actual in ["MOUNTAINOUS", "OCEAN", "NAVIGABLE_RIVER"] or carac_actual == "ICE":
+	if es_centro or terreno_actual in ["MOUNTAINOUS", "OCEAN", "NAVIGABLE_RIVER"] or carac_actual in ["ICE", "NATURAL_WONDER"]:
 		if header_node: header_node.visible = false
 		grid_recursos.visible = false
 		if btn_quitar_recurso: btn_quitar_recurso.visible = false
 		return
 	
-	if carac_actual == "NATURAL_WONDER":
-		if header_node and header_node is HBoxContainer:
-			for child in header_node.get_children():
-				if child is Label:
-					child.text = "NATURAL WONDERS"
-					break
-		if header_node: header_node.visible = true
-		grid_recursos.visible = true
-		grid_recursos.columns = 2
-		if btn_quitar_recurso: btn_quitar_recurso.visible = false
-		
-		if Constantes.MARAVILLAS_NATURALES:
-			for mar_name in Constantes.MARAVILLAS_NATURALES.keys():
-				var m_data = Constantes.MARAVILLAS_NATURALES[mar_name]
-				var ter_validos = m_data.get("terreno", [])
-				var bio_validos = m_data.get("bioma", [])
-				var ter_ok = ("TODOS" in ter_validos) or (terreno_actual in ter_validos)
-				var bio_ok = bioma_es_valido(bioma_actual, bio_validos)
-				
-				if not (ter_ok and bio_ok): continue
-				
-				var vbox_item = VBoxContainer.new()
-				vbox_item.add_theme_constant_override("separation", 6)
-				vbox_item.alignment = BoxContainer.ALIGNMENT_CENTER
-				
-				var btn = Button.new()
-				btn.custom_minimum_size = Vector2(100, 100)
-				btn.clip_contents = true
-				btn.tooltip_text = mar_name
-				
-				var sb = StyleBoxFlat.new()
-				sb.bg_color = Color(0.2, 0.1, 0.3)
-				sb.border_color = Color(0.9, 0.4, 0.9)
-				sb.set_border_width_all(2)
-				sb.set_corner_radius_all(12)
-				btn.add_theme_stylebox_override("normal", sb)
-				
-				var tex_path = resolver_ruta_asset(mar_name)
-				if ResourceLoader.exists(tex_path):
-					var tex_rect = TextureRect.new()
-					tex_rect.texture = load(tex_path)
-					tex_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-					tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-					tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-					tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-					btn.add_child(tex_rect)
-				else:
-					btn.text = mar_name
-					btn.add_theme_font_size_override("font_size", 12)
-					
-				var mar_param = mar_name
-				btn.pressed.connect(func(): _aplicar_maravilla_natural(mar_param))
-				vbox_item.add_child(btn)
-				
-				var lbl = Label.new()
-				lbl.text = mar_name
-				lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-				lbl.add_theme_font_size_override("font_size", 11)
-				lbl.add_theme_color_override("font_color", Color.WHITE)
-				lbl.custom_minimum_size = Vector2(100, 0)
-				lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-				vbox_item.add_child(lbl)
-				grid_recursos.add_child(vbox_item)
-		return
 
 	if header_node and header_node is HBoxContainer:
 		for child in header_node.get_children():
@@ -862,6 +813,50 @@ func actualizar_botones_recursos_ui():
 			btn.pressed.connect(func(): _aplicar_recurso(rec_param))
 			grid_recursos.add_child(btn)
 
+# Devuelve las maravillas naturales válidas para una celda: cumplen bioma/terreno,
+# respetan el límite de casillas por asentamiento y excluyen las que quedarían
+# adyacentes a una maravilla natural distinta ya presente en el tablero.
+func listar_maravillas_disponibles_celda(coord: Vector2i) -> Array:
+	var disponibles: Array = []
+	if not city_grid.has(coord): return disponibles
+	if asentamientos.size() == 0 or asentamiento_activo_idx >= asentamientos.size(): return disponibles
+	var d = city_grid[coord]
+	if celda_tiene_desarrollo(d): return disponibles
+	if d.edificios.has("Palace") or d.edificios.has("Town Hall"): return disponibles
+	var b_actual = d.bioma
+	var t_actual = d.terreno
+	var recurso_actual = str(d.get("recurso", ""))
+	for mar_name in Constantes.MARAVILLAS_NATURALES.keys():
+		var m_data = Constantes.MARAVILLAS_NATURALES[mar_name]
+		var ter_validos = m_data.get("terreno", [])
+		var bio_validos = m_data.get("bioma", [])
+		var ter_ok = ("TODOS" in ter_validos) or (t_actual in ter_validos)
+		var bio_ok = bioma_es_valido(b_actual, bio_validos)
+		if not (ter_ok and bio_ok): continue
+		# Límite estricto por asentamiento. Si la celda ya tiene esta misma
+		# maravilla, su propia instancia no consumiría una plaza adicional.
+		var ya = MaravillasNaturales.contar_celdas(city_grid, mar_name)
+		if recurso_actual == mar_name:
+			ya -= 1
+		if ya >= MaravillasNaturales.limite(mar_name): continue
+		# Regla de exclusión: dos maravillas naturales distintas nunca pueden
+		# ser adyacentes. Si una celda vecina ya contiene una maravilla de
+		# distinto nombre, esta no se ofrece: su botón desaparece del panel
+		# y la colocación queda bloqueada.
+		var bloqueada_por_adyacencia = false
+		for coord_vecina in city_grid:
+			if HexMath.dist_hex(coord, coord_vecina) != 1: continue
+			var d_vecina = city_grid[coord_vecina]
+			if d_vecina.get("caracteristica", "") != "NATURAL_WONDER": continue
+			var mar_vecina = str(d_vecina.get("recurso", ""))
+			if mar_vecina != "" and mar_vecina != mar_name:
+				bloqueada_por_adyacencia = true
+				break
+		if bloqueada_por_adyacencia: continue
+		disponibles.append(mar_name)
+	return disponibles
+
+
 func actualizar_panel_maravillas_naturales():
 	if not grid_maravillas_naturales: return
 	for child in grid_maravillas_naturales.get_children(): child.queue_free()
@@ -869,20 +864,8 @@ func actualizar_panel_maravillas_naturales():
 	if not city_grid.has(celda_seleccionada): return
 	var d = city_grid[celda_seleccionada]
 	if d.get("caracteristica", "") != "NATURAL_WONDER": return
-	
-	var bioma_actual = d.bioma
-	var terreno_actual = d.terreno
-	
-	if Constantes.MARAVILLAS_NATURALES:
-		for mar_name in Constantes.MARAVILLAS_NATURALES.keys():
-			var m_data = Constantes.MARAVILLAS_NATURALES[mar_name]
-			var ter_validos = m_data.get("terreno", [])
-			var bio_validos = m_data.get("bioma", [])
-			
-			var ter_ok = ("TODOS" in ter_validos) or (terreno_actual in ter_validos)
-			var bio_ok = bioma_es_valido(bioma_actual, bio_validos)
-			
-			if not (ter_ok and bio_ok): continue
+
+	for mar_name in listar_maravillas_disponibles_celda(celda_seleccionada):
 			
 			var vbox_item = VBoxContainer.new()
 			vbox_item.add_theme_constant_override("separation", 8)
@@ -1302,17 +1285,9 @@ func actualizar_panel_pincel():
 			if not "SNOW" in valid_c: valid_c.append("SNOW")
 			if not "ICE" in valid_c: valid_c.append("ICE")
 
-	# FIX MARAVILLAS: Evaluación directa contra Constantes garantizando que no se pierda en Tundra Montaña
-	var nw_compatible = false
-	if "MARAVILLAS_NATURALES" in Constantes:
-		for nw in Constantes.MARAVILLAS_NATURALES.values():
-			var b_ok = nw.get("biomas", []).is_empty() or b_actual in nw.get("biomas", [])
-			var t_ok = nw.get("terrenos", []).is_empty() or t_actual in nw.get("terrenos", [])
-			if b_ok and t_ok:
-				nw_compatible = true
-				break
-				
-	if nw_compatible and not es_centro_gob:
+	# La lista de maravillas válidas sustituye al antiguo flag genérico: no se añade
+	# "NATURAL_WONDER" a valid_c y no se resetea la característica por ello.
+	if c_actual == "NATURAL_WONDER" and d.get("recurso", "") != "":
 		if not "NATURAL_WONDER" in valid_c:
 			valid_c.append("NATURAL_WONDER")
 
@@ -1327,9 +1302,8 @@ func actualizar_panel_pincel():
 		"AQUATIC": {"txt": "Aquatic", "col": Color(0.2, 0.2, 0.2)},
 		"FLOODPLAIN": {"txt": "🛤️ Floodplain", "col": Color(0.3, 0.7, 0.9)},
 		"VOLCANO": {"txt": "🌋 Volcano", "col": Color(0.2, 0.2, 0.2)},
-		"ICE": {"txt": "❄️ Ice", "col": Color(0.2, 0.2, 0.2)},
-		"SNOW": {"txt": "Snow", "col": Color(0.2, 0.2, 0.2)},
-		"NATURAL_WONDER": {"txt": "Nat. Wonder", "col": Color(0.5, 0.0, 0.5), "icon": "res://assets/natural_wonder.png"}
+		"ICE": {"txt": "❄️ Ice", "col": Color(0.85, 0.93, 1.0)},
+		"SNOW": {"txt": "Snow", "col": Color(1.0, 1.0, 1.0)},
 	}
 	
 	var info_none = carac_ui["NONE"]
@@ -1342,19 +1316,32 @@ func actualizar_panel_pincel():
 		btn_rio.pressed.connect(_toggle_rio_celda)
 		grid_carac.add_child(btn_rio)
 		
+	# Un botón por cada maravilla natural válida en la celda (bioma/terreno,
+	# límite de casillas y exclusión de adyacencia con otra maravilla
+	# distinta); las bloqueadas no se listan y su botón desaparece de
+	# Features. Ya no existe el botón genérico.
+	var nw_disponibles = listar_maravillas_disponibles_celda(celda_seleccionada)
+	# Características normales (sin el botón genérico de maravilla).
 	for c in valid_c:
 		if c == "NONE": continue
-		if es_centro_gob and c == "NATURAL_WONDER": continue
+		if c == "NATURAL_WONDER": continue
 		var info = carac_ui[c]
-		var btn = _crear_btn_opcion(info.txt if not info.has("icon") else "", info.col, c == c_actual)
+		var btn = _crear_btn_opcion(info.txt, info.col, c == c_actual)
 		btn.tooltip_text = info.txt
-		if info.has("icon") and ResourceLoader.exists(info.icon):
-			btn.icon = load(info.icon)
-			btn.expand_icon = true
-			btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		var c_val = c
 		btn.pressed.connect(func(): _aplicar_caracteristica(c_val))
 		grid_carac.add_child(btn)
+	for mar_name in nw_disponibles:
+		var tex_nw = resolver_ruta_asset(mar_name)
+		var btn_nw = _crear_btn_opcion(mar_name, Color(0.5, 0.0, 0.5), d.get("recurso", "") == mar_name)
+		btn_nw.tooltip_text = mar_name
+		if tex_nw != "" and ResourceLoader.exists(tex_nw):
+			btn_nw.icon = load(tex_nw)
+			btn_nw.expand_icon = true
+			btn_nw.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		var mar_val = mar_name
+		btn_nw.pressed.connect(func(): _aplicar_maravilla_natural(mar_val))
+		grid_carac.add_child(btn_nw)
 
 	var asent_centro = asentamientos[asentamiento_activo_idx].centro if asentamientos.size() > 0 else Vector2i.ZERO
 	var dist_al_centro = HexMath.dist_hex(celda_seleccionada, asent_centro)
@@ -1373,72 +1360,8 @@ func actualizar_panel_pincel():
 		)
 		grid_carac.add_child(btn_unclaim)
 
-
-		# ==============================================================================
-		# DESPLEGABLE MARAVILLAS NATURALES
-		# ==============================================================================
-		var parent_container = grid_carac.get_parent()
-		if parent_container:
-			var old_nw = parent_container.get_node_or_null("NW_Container")
-			if old_nw:
-				old_nw.name = "ToDelete"
-				old_nw.queue_free()
-
-			if c_actual == "NATURAL_WONDER":
-				var vbox_nw = VBoxContainer.new()
-				vbox_nw.name = "NW_Container"
-				vbox_nw.add_theme_constant_override("separation", 6)
-				
-				vbox_nw.add_child(HSeparator.new())
-				
-				var lbl_nw = Label.new()
-				lbl_nw.text = "SELECT NATURAL WONDER"
-				lbl_nw.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-				lbl_nw.add_theme_font_size_override("font_size", 14)
-				lbl_nw.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
-				vbox_nw.add_child(lbl_nw)
-				
-				var opt_nw = OptionButton.new()
-				opt_nw.custom_minimum_size = Vector2(0, 32)
-				
-				var nw_validas = []
-				if "MARAVILLAS_NATURALES" in Constantes:
-					for nw_name in Constantes.MARAVILLAS_NATURALES.keys():
-						var data_nw = Constantes.MARAVILLAS_NATURALES[nw_name]
-						var b_ok = data_nw.get("biomas", []).is_empty() or b_actual in data_nw.get("biomas", [])
-						var t_ok = data_nw.get("terrenos", []).is_empty() or t_actual in data_nw.get("terrenos", [])
-						if b_ok and t_ok:
-							nw_validas.append(nw_name)
-							
-				if nw_validas.size() > 0:
-					for nw in nw_validas:
-						opt_nw.add_item(nw)
-					
-					# Guardamos el recurso internamente para mantener la maravilla
-					var current_nw = d.get("recurso", "")
-					var found = false
-					for i in range(opt_nw.item_count):
-						if opt_nw.get_item_text(i) == current_nw:
-							opt_nw.select(i)
-							found = true
-							break
-					
-					if not found:
-						opt_nw.select(0)
-						d["recurso"] = opt_nw.get_item_text(0)
-						
-					opt_nw.item_selected.connect(func(idx):
-						d["recurso"] = opt_nw.get_item_text(idx)
-						queue_redraw()
-					)
-				else:
-					opt_nw.add_item("No valid wonders")
-					opt_nw.disabled = true
-					
-				vbox_nw.add_child(opt_nw)
-				parent_container.add_child(vbox_nw)
-				# Mover el contenedor al final del panel
-				parent_container.move_child(vbox_nw, -1)
+	# La selección de maravillas se realiza únicamente con los botones
+	# individuales válidos generados arriba; no existe un desplegable global.
 
 
 func _crear_cabecera_panel(texto: String, asset_name: String) -> HBoxContainer:
@@ -1547,21 +1470,28 @@ func actualizar_panel_construccion():
 		
 		if datos_c.edificios.size() == 0 and not es_centro_gob:
 			var lista_mejoras_validas = []
+			# Una celda de maravilla natural solo admite "Expedition Base";
+			# su nombre se guarda en "recurso", por lo que debe tratarse antes
+			# del filtro normal de compatibilidad con recursos.
+			var es_maravilla_celda = MaravillasNaturales.es_maravilla(datos_c)
 			for mej_nombre in Constantes.DATOS_MEJORAS.keys():
 				var d_mej = Constantes.DATOS_MEJORAS[mej_nombre]
-				
+
 				if d_mej.has("civ") and d_mej.civ != civ_actual and d_mej.civ != civ_sincretismo: continue
 				var era_mej = d_mej.get("era", "Antiquity")
 				if Constantes.ORDEN_ERAS.get(era_mej, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
-				
+
 				if mejora_actual != "" and mej_nombre not in ["Abattoir", "Obshchina"]: continue
 				if mejora_actual == "" and mej_nombre in ["Abattoir", "Obshchina"]: continue
-				
-				if recurso_celda != "":
+
+				if es_maravilla_celda:
+					if mej_nombre != MaravillasNaturales.MEJORA_ACTIVACION: continue
+				elif recurso_celda != "":
 					if not es_mejora_compatible_con_recurso(mej_nombre, recurso_celda, era_actual): continue
-				
+
 				if ReglasJuego.es_mejora_valida(celda_seleccionada, mej_nombre, asent_centro, city_grid, era_actual, civ_actual, asent_tipo):
 					lista_mejoras_validas.append(mej_nombre)
+
 					
 			if lista_mejoras_validas.size() > 0:
 				vbox.add_child(_crear_cabecera_panel("IMPROVEMENTS", "improvements"))
@@ -1916,9 +1846,10 @@ func cambiar_seccion(nueva_seccion: String):
 	if panel_felicidad:
 		panel_felicidad.visible = (nueva_seccion == "FELICIDAD")
 	_actualizar_etiqueta_felicidad()
-	
-	var es_felicidad = (seccion_actual == "FELICIDAD")
-	var mostrar_info = (nueva_seccion != "ASENTAMIENTOS" and nueva_seccion != "EXTERNOS" and nueva_seccion != "FELICIDAD")
+	# La información de celda permanece disponible también en el visor de
+	# felicidad: allí es donde la felicidad se integra en la caja de rendimientos.
+	var mostrar_info = (nueva_seccion != "ASENTAMIENTOS" and nueva_seccion != "EXTERNOS")
+
 	if panel_info: panel_info.visible = mostrar_info
 
 	if lbl_info:
@@ -2064,6 +1995,12 @@ func actualizar_panel_ui():
 		"Science": r_yield.get("Science", 0), "Happiness": r_yield.get("Happiness", 0), 
 		"Influence": r_yield.get("Influence", 0)
 	}
+
+	# Los rendimientos base de una celda de maravilla sustituyen a los del
+	# terreno subyacente y se toman exactamente de Constantes.
+	var base_maravilla = MaravillasNaturales.rendimientos_base_celda(d)
+	if not base_maravilla.is_empty():
+		yields_sum = base_maravilla.duplicate()
 	
 	var era_mult = obtener_multiplicador_era()
 	var l_bonos_lista = Constantes.DATOS_LIDERES.get(lider_actual, {}).get("bonos", [])
@@ -2151,6 +2088,13 @@ func actualizar_panel_ui():
 			for k in yields_sum.keys():
 				if yields_sum[k] > 0: yields_sum[k] += int(yields_sum[k] * 0.5 * nw_count)
 
+	# Bono especial de las maravillas activadas con Expedition Base que recae
+	# sobre esta celda concreta del asentamiento activo.
+	var bonos_maravilla = MaravillasNaturales.rendimientos_especiales_para_celda(city_grid, celda_seleccionada)
+	for clave in bonos_maravilla.keys():
+		if yields_sum.has(clave):
+			yields_sum[clave] = int(yields_sum[clave]) + int(bonos_maravilla[clave])
+
 	# El atractivo de la celda (visor de felicidad) aporta felicidad directa
 	# a la caja de rendimientos: Atractivo = +1, Encantador = +2.
 	yields_sum["Happiness"] = int(yields_sum.get("Happiness", 0)) + int(d.get("favorita", 0))
@@ -2176,7 +2120,8 @@ func actualizar_panel_ui():
 	
 	var has_yield = false
 	for k in ["Food", "Production", "Gold", "Culture", "Science", "Happiness", "Influence"]:
-		if yields_sum[k] > 0 or yields_sum[k] < 0:
+		# La felicidad se muestra siempre dentro de esta caja, incluso en 0.
+		if k == "Happiness" or yields_sum[k] > 0 or yields_sum[k] < 0:
 			has_yield = true
 			var hb_i = HBoxContainer.new()
 			hb_i.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -2229,6 +2174,10 @@ func actualizar_panel_ui():
 	
 	# --- IMPLEMENTACIÓN VISUAL POR EDIFICIO ---
 	for edif in d.edificios:
+		# El panel del pincel no muestra edificios, mejoras ni maravillas
+		# construibles: solo se mantienen las maravillas naturales, que se
+		# pintan con el pincel y no se construyen.
+		if es_pincel and not Constantes.MARAVILLAS_NATURALES.has(edif): continue
 		var is_obsolete = ReglasJuego.es_edificio_obsoleto(edif, celda_seleccionada, era_actual, city_grid)
 		
 		var panel_bldg = PanelContainer.new()
@@ -2369,7 +2318,8 @@ func actualizar_panel_ui():
 		panel_bldg.add_child(margin_bldg)
 		vbox_bldgs.add_child(panel_bldg)
 		
-	if d.get("mejora_tipo", "") != "":
+	# Las mejoras tampoco se muestran en el panel del pincel.
+	if d.get("mejora_tipo", "") != "" and not es_pincel:
 		var panel_mej = PanelContainer.new()
 		var sb_mej = StyleBoxFlat.new()
 		sb_mej.bg_color = Color(0.15, 0.15, 0.18)
@@ -2508,33 +2458,40 @@ func actualizar_panel_recuento_mejoras():
 	var total_yields = {"Food": 0, "Production": 0, "Gold": 0, "Science": 0, "Culture": 0, "Happiness": 0, "Influence": 0}
 	var improved_resources = []
 	var warehouses_construidos = {}
-	
-	var celdas_asent = asent.get("grid", [])
-	if celdas_asent.size() == 0:
+
+	# El rendimiento agregado se calcula sobre el grid propio del asentamiento.
+	var grid_asent: Dictionary = asent.get("grid", {})
+	var celdas_asent: Array = []
+	if grid_asent.size() > 0:
+		celdas_asent.assign(grid_asent.keys())
+	else:
 		for coord in city_grid.keys():
 			if HexMath.dist_hex(coord, asent_centro) <= 3:
 				celdas_asent.append(coord)
-				
+
 	for coord in celdas_asent:
 		if not city_grid.has(coord): continue
 		var d_c = city_grid[coord]
-		
+
 		for edif in d_c.get("edificios", []):
 			warehouses_construidos[edif] = true
-		
+
 		var rec = d_c.get("recurso", "")
 		var mej = d_c.get("mejora_tipo", "")
-		if rec != "" and mej != "":
+		if rec != "" and mej != "" and not MaravillasNaturales.es_maravilla(d_c):
 			improved_resources.append(rec)
-			
+
 		var tiene_mejora = (mej != "")
 		var tiene_edificios = (d_c.get("edificios", []).size() > 0)
-		var es_maravilla = (d_c.get("caracteristica", "") == "NATURAL_WONDER" or d_c.get("terreno", "") == "NATURAL_WONDER")
-		
-		if tiene_mejora or tiene_edificios or es_maravilla:
+		var es_maravilla = MaravillasNaturales.es_maravilla(d_c)
+
+		# En maravillas, base y bonos especiales se añaden después con el motor
+		# para no duplicar ni mezclar los rendimientos del terreno subyacente.
+		if not es_maravilla and (tiene_mejora or tiene_edificios):
 			var r_yield = ReglasJuego.calcular_rendimiento_celda(d_c.bioma, d_c.terreno, d_c.get("caracteristica", "NONE"), d_c.get("recurso", ""), d_c.get("rio", false), era_actual)
 			for k in r_yield.keys():
 				if total_yields.has(k): total_yields[k] += r_yield[k]
+
 			
 		var era_mult = obtener_multiplicador_era()
 		for edif in d_c.edificios:
@@ -2561,6 +2518,17 @@ func actualizar_panel_recuento_mejoras():
 				for wk in w_yields.keys():
 					if total_yields.has(wk): total_yields[wk] += w_yields[wk]
 					
+	# Base y bonos especiales de maravillas, calculados solo con el grid propio.
+	var grid_rendimientos: Dictionary = grid_asent
+	if grid_rendimientos.is_empty():
+		for coord in celdas_asent:
+			if city_grid.has(coord):
+				grid_rendimientos[coord] = city_grid[coord]
+	var rendimientos_maravillas = MaravillasNaturales.rendimientos_totales(grid_rendimientos)
+	for clave in rendimientos_maravillas.keys():
+		if total_yields.has(clave):
+			total_yields[clave] += int(rendimientos_maravillas[clave])
+
 	var active_yields = []
 	for yk in ["Food", "Production", "Gold", "Science", "Culture", "Happiness", "Influence"]:
 		if total_yields.get(yk, 0) > 0:
@@ -2657,7 +2625,7 @@ func actualizar_panel_recuento_mejoras():
 	vbox.add_child(hb_head)
 	vbox.add_child(HSeparator.new())
 	
-	var mejoras_permitidas = ["Farm", "Pasture", "Plantation", "Fishing Boat", "Camp", "Woodcutter", "Mine", "Quarry", "Clay Pit"]
+	var mejoras_permitidas = ["Farm", "Pasture", "Plantation", "Fishing Boat", "Camp", "Woodcutter", "Mine", "Quarry", "Clay Pit", "Expedition Base"]
 	var conteo_construidas = {}
 	var conteo_disponibles = {}
 	for m in mejoras_permitidas:
@@ -2668,15 +2636,23 @@ func actualizar_panel_recuento_mejoras():
 		if not city_grid.has(coord): continue
 		var d_c = city_grid[coord]
 		
-		if d_c.get("ajeno", false): continue 
-		if d_c.get("caracteristica", "") == "NATURAL_WONDER" or d_c.get("terreno", "") == "NATURAL_WONDER": continue
+		if d_c.get("ajeno", false): continue
 		if d_c.get("edificios", []).size() > 0: continue
-		
+
 		var mej_colocada = d_c.get("mejora_tipo", "")
+		var es_maravilla_c = MaravillasNaturales.es_maravilla(d_c)
+		if es_maravilla_c:
+			# Las maravillas solo admiten Expedition Base en este recuento.
+			if mej_colocada == MaravillasNaturales.MEJORA_ACTIVACION:
+				conteo_construidas[MaravillasNaturales.MEJORA_ACTIVACION] += 1
+			elif ReglasJuego.es_mejora_valida(coord, MaravillasNaturales.MEJORA_ACTIVACION, asent_centro, city_grid, era_actual, civ_actual, asent_tipo):
+				conteo_disponibles[MaravillasNaturales.MEJORA_ACTIVACION] += 1
+			continue
+
 		if mej_colocada != "":
 			if mej_colocada in mejoras_permitidas:
 				conteo_construidas[mej_colocada] += 1
-			continue 
+			continue
 			
 		var recurso_celda = d_c.get("recurso", "")
 		for mej_nombre in mejoras_permitidas:
@@ -2995,6 +2971,8 @@ func obtener_tooltip_mejora(nombre_mej: String) -> String:
 	var d = Constantes.DATOS_MEJORAS[nombre_mej]
 	var txt = nombre_mej.to_upper() + "\n"
 	txt += "Yields: " + d.tipo
+	if nombre_mej == MaravillasNaturales.MEJORA_ACTIVACION:
+		txt += "\nActivates this natural wonder's special bonus."
 	return txt
 
 func crear_boton_icono(item_name: String, forma: String, color_borde: Color, tooltip: String, id_press: String, tipo_accion: String = "CONSTRUCCION", es_mejora: bool = false, mostrar_texto: bool = true) -> VBoxContainer:
@@ -3077,11 +3055,15 @@ func _draw() -> void:
 
 		if seccion_actual == "FELICIDAD":
 			# Visor de felicidad: gris = Normal, verde claro = Atractivo, verde oscuro = Encantador.
-			match int(datos.get("favorita", 0)):
-				1: color_base = Color(0.56, 0.93, 0.56)
-				2: color_base = Color(0.13, 0.54, 0.13)
-				_: color_base = Color(0.5, 0.5, 0.5)
-			if coord == celda_seleccionada: color_base = Color.MAGENTA
+			# Las Maravillas Naturales se fuerzan a azul oscuro y bloquean la edición con clic.
+			# La celda seleccionada conserva su color de estado para no ocultar la información.
+			if celda_tiene_maravilla_natural(datos):
+				color_base = Color(0.07, 0.13, 0.38)
+			else:
+				match int(datos.get("favorita", 0)):
+					1: color_base = Color(0.56, 0.93, 0.56)
+					2: color_base = Color(0.13, 0.54, 0.13)
+					_: color_base = Color(0.5, 0.5, 0.5)
 		elif coord == celda_seleccionada: color_base = Color.MAGENTA
 		elif Constantes.COLORES_BIOMA.has(datos.bioma):
 			color_base = Constantes.COLORES_BIOMA[datos.bioma]
@@ -3157,6 +3139,25 @@ func _draw() -> void:
 						draw_line(centro, centro_n, Color(0.15, 0.55, 0.95), 8.0, true)
 			if not tiene_vecino_rio: draw_circle(centro, 6.0, Color(0.15, 0.55, 0.95))
 
+	# Franja azul ancha para terrenos de río navegable: mismo criterio
+	# secuencial que el minor river (segmentos entre celdas contiguas y
+	# círculo si la celda queda aislada), pero con el doble de ancho.
+	var lineas_nav_dibujadas = {}
+	for coord in city_grid.keys():
+		if city_grid[coord].terreno != "NAVIGABLE_RIVER": continue
+		var centro = HexMath.cubo_a_pixel(radio_hex, coord.x, coord.y, -coord.x - coord.y)
+		var tiene_vecino_nav = false
+		for vec in HexMath.VECINOS_HEX:
+			var n = coord + vec
+			if city_grid.has(n) and city_grid[n].terreno == "NAVIGABLE_RIVER":
+				tiene_vecino_nav = true
+				var clave_par = [coord, n] if (coord.x < n.x or (coord.x == n.x and coord.y < n.y)) else [n, coord]
+				if not lineas_nav_dibujadas.has(clave_par):
+					lineas_nav_dibujadas[clave_par] = true
+					var centro_n = HexMath.cubo_a_pixel(radio_hex, n.x, n.y, -n.x - n.y)
+					draw_line(centro, centro_n, Color(0.15, 0.55, 0.95), 16.0, true)
+		if not tiene_vecino_nav: draw_circle(centro, 12.0, Color(0.15, 0.55, 0.95))
+
 func actualizar_icono_celda(coord: Vector2i):
 	if not city_grid.has(coord): return
 	var datos = city_grid[coord]
@@ -3180,18 +3181,25 @@ func actualizar_icono_celda(coord: Vector2i):
 		add_child(hbox_recurso)
 		datos.nodo_recurso = hbox_recurso
 		
-	if not is_instance_valid(datos.get("nodo_terreno")):
-		var hbox_terreno = HBoxContainer.new()
-		hbox_terreno.custom_minimum_size = Vector2(40, 40)
-		hbox_terreno.alignment = BoxContainer.ALIGNMENT_CENTER
-		hbox_terreno.position = centro_px - Vector2(20, -radio_hex * 0.15)
-		add_child(hbox_terreno)
-		datos.nodo_terreno = hbox_terreno
+	# El icono de terreno es una etiqueta propia, hija directa del mapa:
+	# así su caja y posición no las toca ningún contenedor y el emoji
+	# puede centrarse exactamente en el centro de la celda. Si una celda
+	# aún tiene el HBoxContainer antiguo, se recrea como Label (mismo
+	# criterio defensivo que nodo_icono).
+	if not is_instance_valid(datos.get("nodo_terreno")) or not (datos.nodo_terreno is Label):
+		if is_instance_valid(datos.get("nodo_terreno")): datos.nodo_terreno.queue_free()
+		var lbl_terreno = Label.new()
+		lbl_terreno.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_terreno.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		lbl_terreno.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(lbl_terreno)
+		datos.nodo_terreno = lbl_terreno
 	
 	if is_instance_valid(datos.nodo_recurso):
 		for child in datos.nodo_recurso.get_children(): child.queue_free()
 	if is_instance_valid(datos.nodo_terreno):
 		for child in datos.nodo_terreno.get_children(): child.queue_free()
+		datos.nodo_terreno.text = ""
 	if is_instance_valid(datos.nodo_icono):
 		for child in datos.nodo_icono.get_children(): child.queue_free()
 
@@ -3211,7 +3219,7 @@ func actualizar_icono_celda(coord: Vector2i):
 	if is_instance_valid(datos.get("nodo_terreno")):
 		datos.nodo_terreno.visible = true
 	
-	var anadir_elemento_visual = func(container: Control, asset_name: String, nombre_fallback: String, tam_minimo: float, texto_visible: bool = true):
+	var anadir_elemento_visual = func(container: Control, asset_name: String, nombre_fallback: String, tam_minimo: float, texto_visible: bool = true, tam_fuente: float = 12.0):
 		var path = ""
 		if asset_name != "": path = resolver_ruta_asset(asset_name)
 		if path != "" and ResourceLoader.exists(path):
@@ -3224,7 +3232,7 @@ func actualizar_icono_celda(coord: Vector2i):
 		elif texto_visible:
 			var lbl = Label.new()
 			lbl.text = nombre_fallback
-			lbl.add_theme_font_size_override("font_size", 12)
+			lbl.add_theme_font_size_override("font_size", int(tam_fuente))
 			lbl.add_theme_color_override("font_color", Color.WHITE)
 			container.add_child(lbl)
 
@@ -3238,12 +3246,29 @@ func actualizar_icono_celda(coord: Vector2i):
 		if datos.caracteristica == "WET": txt_icono = "💧"
 		elif datos.caracteristica == "VEGETATED": txt_icono = "🌲"
 		elif datos.caracteristica == "FLOODPLAIN": txt_icono = "🛤️"
-		anadir_elemento_visual.call(datos.nodo_terreno, "", txt_icono, 32.0, true)
+		# El río navegable no lleva icono (antes 🚢): lo representa la franja
+		# azul ancha que dibuja _draw() en la celda, como el minor river.
+		if datos.terreno == "NAVIGABLE_RIVER": txt_icono = ""
+		if txt_icono != "" and is_instance_valid(datos.nodo_terreno):
+			# Tamaño reducido respecto a la primera versión y caja centrada en
+			# la celda; las maravillas naturales conservan su arte (textura a
+			# sangre) y solo llevan el icono pequeño encima.
+			var es_icono_grande = (datos.terreno in ["ROUGH", "MOUNTAINOUS", "OCEAN", "LAKE"] or datos.caracteristica in ["WET", "VEGETATED"]) and datos.caracteristica != "NATURAL_WONDER"
+			var tam_terreno = clampf(radio_hex, 32.0, 54.0) if es_icono_grande else 12.0
+			var caja_terreno = Vector2(tam_terreno * 1.5, tam_terreno * 1.5) if es_icono_grande else Vector2(20, 20)
+			datos.nodo_terreno.add_theme_font_size_override("font_size", int(tam_terreno))
+			datos.nodo_terreno.text = txt_icono
+			datos.nodo_terreno.size = caja_terreno
+			datos.nodo_terreno.position = centro_px - caja_terreno * 0.5
 		
 	var edificios_visibles = []
 	for edif in datos.edificios:
-		if not ReglasJuego.es_edificio_muralla(edif):
-			edificios_visibles.append(edif)
+		if ReglasJuego.es_edificio_muralla(edif): continue
+		# Con el visor de pincel activo no se pintan sellos de edificios ni
+		# de maravillas construibles en el mapa; las maravillas naturales sí
+		# se quedan (se pintan con el pincel, no se construyen).
+		if seccion_actual == "PINCEL" and not Constantes.MARAVILLAS_NATURALES.has(edif): continue
+		edificios_visibles.append(edif)
 			
 	if edificios_visibles.size() > 0:
 		var num_edif = edificios_visibles.size()
@@ -3289,7 +3314,8 @@ func actualizar_icono_celda(coord: Vector2i):
 						anadir_elemento_visual.call(datos.nodo_icono, asset_name, edif, size_edif, true)
 				else:
 					anadir_elemento_visual.call(datos.nodo_icono, asset_name, edif, size_edif, true)
-	elif datos.mejora_tipo != "":
+	# Las mejoras no se pintan en el mapa con el visor de pincel activo.
+	elif datos.mejora_tipo != "" and seccion_actual != "PINCEL":
 		datos.nodo_icono.columns = 1
 		var ancho = 36.0
 		if cache_puentes_urbanos.has(coord) and not datos.get("ajeno", false):
@@ -3402,9 +3428,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			actualizar_panel_ui()
 			queue_redraw()
 			
+# Detecta si una celda contiene una Maravilla Natural (por característica o por terreno).
+func celda_tiene_maravilla_natural(d: Dictionary) -> bool:
+	if d.get("caracteristica", "") == "NATURAL_WONDER": return true
+	return str(d.get("terreno", "")).strip_edges().to_upper() == "NATURAL_WONDER"
+
+
 func ciclar_felicidad_celda(coord: Vector2i) -> void:
 	if not city_grid.has(coord): return
 	var d = city_grid[coord]
+	# Bloqueo de edición: la felicidad de una Maravilla Natural no se puede ciclar.
+	if celda_tiene_maravilla_natural(d):
+		_actualizar_etiqueta_felicidad()
+		queue_redraw()
+		return
 	d.favorita = (int(d.get("favorita", 0)) + 1) % 3
 	_actualizar_etiqueta_felicidad()
 	actualizar_iconos_todos()
@@ -3419,7 +3456,10 @@ func _actualizar_etiqueta_felicidad() -> void:
 	if not lbl_fel: return
 	var f = int(city_grid[celda_seleccionada].get("favorita", 0)) if city_grid.has(celda_seleccionada) else 0
 	var nombre = ["Normal", "Atractivo", "Encantador"][clampi(f, 0, 2)]
-	lbl_fel.text = "Celda: %s (%s).\nClica para ciclar: Normal → Atractivo → Encantador.\nGris = Normal, verde claro = Atractivo, verde oscuro = Encantador." % [str(celda_seleccionada), nombre]
+	if city_grid.has(celda_seleccionada) and celda_tiene_maravilla_natural(city_grid[celda_seleccionada]):
+		lbl_fel.text = "Celda: %s (Maravilla Natural).\nEdición de felicidad bloqueada: el clic no cambia su estado.\nColor azul oscuro fijo en el visor." % str(celda_seleccionada)
+	else:
+		lbl_fel.text = "Celda: %s (%s).\nClica para ciclar: Normal → Atractivo → Encantador.\nGris = Normal, verde claro = Atractivo, verde oscuro = Encantador." % [str(celda_seleccionada), nombre]
 
 
 func actualizar_visibilidad_boton_construccion():
@@ -3428,10 +3468,15 @@ func actualizar_visibilidad_boton_construccion():
 	var asent_centro = asentamientos[asentamiento_activo_idx].centro
 	var dist = HexMath.dist_hex(celda_seleccionada, asent_centro)
 	var es_ring_4 = (dist == 4)
-	
+
+	# La sección activa siempre oculta su propio botón.
+	if seccion_actual == "CONSTRUCCION":
+		btn_modo_construccion.visible = false
+		if es_ring_4:
+			cambiar_seccion("EXTERNOS" if es_celda_externos_valida() else "ASENTAMIENTOS")
+		return
+
 	btn_modo_construccion.visible = not es_ring_4
-	if es_ring_4 and seccion_actual == "CONSTRUCCION":
-		cambiar_seccion("EXTERNOS" if es_celda_externos_valida() else "ASENTAMIENTOS")
 
 # ==============================================================================
 # PANTALLAS (partidas guardadas y estadísticas)
@@ -3561,12 +3606,18 @@ func mostrar_pantalla_partidas_guardadas():
 			vbox_saves.add_child(btn_save)
 	
 func _controlar_botones_navegacion(mostrar: bool):
-	if btn_menu_pincel: btn_menu_pincel.visible = mostrar
-	if btn_menu_asentamientos: btn_menu_asentamientos.visible = mostrar
-	if btn_menu_maravillas: btn_menu_maravillas.visible = mostrar
-	if btn_modo_construccion: btn_modo_construccion.visible = mostrar
-	if btn_modo_externos: btn_modo_externos.visible = mostrar
-	if btn_menu_felicidad: btn_menu_felicidad.visible = mostrar
+	if mostrar:
+		# Al reactivar la navegación se aplica la regla general: cada botón
+		# conserva su lógica de aparición y el de la sección activa se oculta.
+		_actualizar_botones_navegacion()
+		return
+	if btn_menu_pincel: btn_menu_pincel.visible = false
+	if btn_menu_asentamientos: btn_menu_asentamientos.visible = false
+	if btn_menu_maravillas: btn_menu_maravillas.visible = false
+	if btn_modo_construccion: btn_modo_construccion.visible = false
+	if btn_modo_externos: btn_modo_externos.visible = false
+	if btn_menu_felicidad: btn_menu_felicidad.visible = false
+
 
 func _crear_panel_estadisticas():
 	var canvas_hud = CanvasLayer.new()
@@ -3681,6 +3732,7 @@ func actualizar_panel_estadisticas():
 # autoloads y para que cada regla exista UNA sola vez. Todos los métodos reciben
 # la instancia principal como primer parámetro ("main"), por lo que conservan
 # exactamente la misma firma y comportamiento que cuando eran archivos aparte.
+#   MaravillasNaturales : motor puro de reglas de maravillas naturales.
 #   HexMath             : conversiones y distancias hexagonales.
 #   ReglasJuego         : reglas puras (rendimientos, obsolescencia, validaciones).
 #   GestorPincel        : edición de celdas (bioma, terreno, recurso, río, maravillas).
@@ -3690,6 +3742,269 @@ func actualizar_panel_estadisticas():
 #   GestorDialogos      : diálogos modales (líder, nueva partida, era, sincretismo).
 #   GestorInterfaz      : construcción del árbol de interfaz.
 # ==============================================================================
+
+class MaravillasNaturales:
+	# ==============================================================================
+	# MARAVILLAS NATURALES - MOTOR DE REGLAS PURO
+	# ------------------------------------------------------------------------------
+	# Todas las funciones reciben EXCLUSIVAMENTE el grid de un asentamiento.
+	# Nunca se mezclan los grids de dos asentamientos: así dos ciudades cuyos
+	# radios se solapan pueden reclamar celdas distintas de la misma maravilla sin
+	# interferir en límites, activación ni cálculos de bonificación.
+	#
+	#  - El límite "casillas" es por asentamiento y por tipo de maravilla.
+	#  - Los rendimientos base proceden intactos de "yields".
+	#  - El bono especial requiere mejora_tipo == "Expedition Base".
+	#  - El efecto especial se aplica una vez por cada celda activada.
+	#  - No existe exclusividad global entre maravillas distintas.
+	# ==============================================================================
+
+	const MEJORA_ACTIVACION := "Expedition Base"
+	const AGUA_DULCE := ["Gullfoss", "Iguazú Falls"]
+	const SOLO_RENDIMIENTOS_BASE := [
+		"Mount Everest",
+		"Mount Fuji",
+		"Mount Kilimanjaro",
+		"Nachi Falls",
+		"Thera",
+		"Valley of Flowers",
+		"Vihren"
+	]
+	const VECINOS_HEX := [
+		Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1),
+		Vector2i(-1, 0), Vector2i(0, -1), Vector2i(1, -1)
+	]
+
+	static func es_maravilla(datos: Dictionary) -> bool:
+		return datos.get("caracteristica", "") == "NATURAL_WONDER" \
+			or datos.get("terreno", "") == "NATURAL_WONDER"
+
+	static func nombre_maravilla(datos: Dictionary) -> String:
+		if not es_maravilla(datos):
+			return ""
+		var nombre := str(datos.get("recurso", ""))
+		return nombre if Constantes.MARAVILLAS_NATURALES.has(nombre) else ""
+
+	static func celda_activada(datos: Dictionary) -> bool:
+		return nombre_maravilla(datos) != "" and datos.get("mejora_tipo", "") == MEJORA_ACTIVACION
+
+	static func limite(nombre: String) -> int:
+		return int(Constantes.MARAVILLAS_NATURALES.get(nombre, {}).get("casillas", 1))
+
+	static func contar_celdas(grid: Dictionary, nombre: String) -> int:
+		var total := 0
+		for datos in grid.values():
+			if nombre_maravilla(datos) == nombre:
+				total += 1
+		return total
+
+	static func puede_colocar(grid: Dictionary, nombre: String) -> bool:
+		return contar_celdas(grid, nombre) < limite(nombre)
+
+	static func celdas_activadas(grid: Dictionary) -> Array:
+		var resultado := []
+		for coord in grid.keys():
+			if celda_activada(grid[coord]):
+				resultado.append(coord)
+		return resultado
+
+	static func conteo_activaciones(grid: Dictionary) -> Dictionary:
+		var conteo := {}
+		for coord in celdas_activadas(grid):
+			var nombre := nombre_maravilla(grid[coord])
+			conteo[nombre] = int(conteo.get(nombre, 0)) + 1
+		return conteo
+
+	static func rendimientos_base_celda(datos: Dictionary) -> Dictionary:
+		var nombre := nombre_maravilla(datos)
+		if nombre == "":
+			return {}
+		return _copiar_rendimiento(Constantes.MARAVILLAS_NATURALES[nombre].get("yields", {}))
+
+	static func otorga_agua_dulce(grid: Dictionary) -> bool:
+		for nombre in conteo_activaciones(grid).keys():
+			if nombre in AGUA_DULCE:
+				return true
+		return false
+
+	static func multiplicador_produccion_caballeria(grid: Dictionary) -> float:
+		return 1.0 + (0.2 * int(conteo_activaciones(grid).get("Seongsan Ilchulbong", 0)))
+
+	# Bono especial atribuido a UNA celda concreta del asentamiento.
+	static func rendimientos_especiales_para_celda(grid: Dictionary, coord: Vector2i) -> Dictionary:
+		var total := _rendimientos_vacios()
+		if not grid.has(coord):
+			return total
+
+		var destino: Dictionary = grid[coord]
+		for origen_coord in celdas_activadas(grid):
+			var origen: Dictionary = grid[origen_coord]
+			var aplicacion := _aplicaciones_para(
+				nombre_maravilla(origen),
+				destino,
+				origen_coord,
+				coord,
+				grid
+			)
+			for clave in aplicacion.keys():
+				total[clave] = int(total.get(clave, 0)) + int(aplicacion[clave])
+		return total
+
+	# Base + especiales de todo el asentamiento, usando únicamente su propio grid.
+	static func rendimientos_totales(grid: Dictionary) -> Dictionary:
+		var total := _rendimientos_vacios()
+		for coord in grid.keys():
+			_merge(total, rendimientos_base_celda(grid[coord]))
+			_merge(total, rendimientos_especiales_para_celda(grid, coord))
+		return total
+
+	static func _aplicaciones_para(
+		nombre: String,
+		destino: Dictionary,
+		origen_coord: Vector2i,
+		destino_coord: Vector2i,
+		grid: Dictionary
+	) -> Dictionary:
+		var aplicacion := _rendimientos_vacios()
+		if nombre == "":
+			return aplicacion
+
+		# --- BONOS QUE AMPLIAN TODO EL ASENTAMIENTO ---
+		match nombre:
+			"Bermuda Triangle":
+				if _es_costero(destino):
+					aplicacion.Science = 1
+			"Grand Canyon":
+				if _es_llano(destino):
+					aplicacion.Science = 1
+			"Machapuchare":
+				if _es_rough(destino) or _es_montana(destino):
+					aplicacion.Happiness = 1
+			"Mapu 'a Vaea Blowholes":
+				if _es_costero(destino):
+					aplicacion.Culture = 2
+			"Redwood Forest":
+				if _es_vegetado(destino):
+					aplicacion.Science = 1
+					aplicacion.Culture = 1
+			"Torres del Paine":
+				if _es_tundra(destino):
+					aplicacion.Food = 1
+					aplicacion.Production = 1
+			"Uluru":
+				if _es_desierto(destino):
+					aplicacion.Culture = 2
+			"Zhangjiajie":
+				if _es_rough(destino):
+					aplicacion.Culture = 2
+
+		# Vinicunca acumula +2 Culture en su propia celda por cada rural vecina.
+		if nombre == "Vinicunca":
+			if origen_coord == destino_coord:
+				var rurales := 0
+				for vec in VECINOS_HEX:
+					var n: Vector2i = origen_coord + vec
+					if grid.has(n) and _es_rural(grid[n]):
+						rurales += 1
+				aplicacion.Culture = 2 * rurales
+			return aplicacion
+
+		# --- BONOS POR ADYACENCIA ---
+		if origen_coord == destino_coord or not _es_adyacente(origen_coord, destino_coord):
+			return aplicacion
+
+		match nombre:
+			"Great Barrier Reef":
+				if _es_agua_aplicable(destino):
+					aplicacion.Science = 2
+			"Great Blue Hole":
+				if _es_rural(destino) and _es_marino(destino):
+					aplicacion.Culture = 2
+			"Gullfoss":
+				if _es_rural(destino):
+					aplicacion.Culture = 1
+					aplicacion.Production = 1
+			"Hoerikwaggo":
+				if _es_distrito(destino):
+					aplicacion.Happiness = 2
+			"Iguazú Falls":
+				if _es_distrito(destino):
+					aplicacion.Production = 2
+
+		return aplicacion
+
+	static func _es_adyacente(a: Vector2i, b: Vector2i) -> bool:
+		for vec in VECINOS_HEX:
+			if a + vec == b:
+				return true
+		return false
+
+	static func _es_costero(d: Dictionary) -> bool:
+		return str(d.get("terreno", "")).to_upper() in ["COASTAL", "COSTA"]
+
+	static func _es_llano(d: Dictionary) -> bool:
+		return str(d.get("terreno", "")).to_upper() in ["FLAT", "PLANO"]
+
+	static func _es_rough(d: Dictionary) -> bool:
+		return str(d.get("terreno", "")).to_upper() in ["ROUGH", "ABRUPTO"]
+
+	static func _es_montana(d: Dictionary) -> bool:
+		return str(d.get("terreno", "")).to_upper() in ["MOUNTAINOUS", "MONTAÑA"]
+
+	static func _es_vegetado(d: Dictionary) -> bool:
+		return str(d.get("caracteristica", "")).to_upper() in ["VEGETATED", "VEGETACION"]
+
+	static func _es_tundra(d: Dictionary) -> bool:
+		return str(d.get("bioma", "")).to_upper() == "TUNDRA"
+
+	static func _es_desierto(d: Dictionary) -> bool:
+		return str(d.get("bioma", "")).to_upper() == "DESERT"
+
+	static func _es_agua_aplicable(d: Dictionary) -> bool:
+		return str(d.get("terreno", "")).to_upper() in [
+			"LAKE", "LAGO", "COASTAL", "COSTA", "OCEAN", "OCEANO"
+		]
+
+	static func _es_marino(d: Dictionary) -> bool:
+		return str(d.get("bioma", "")).to_upper() == "MARINE" \
+			or str(d.get("terreno", "")).to_upper() in ["COASTAL", "COSTA", "OCEAN", "OCEANO"]
+
+	static func _es_rural(d: Dictionary) -> bool:
+		return d.get("edificios", []).is_empty()
+
+	static func _es_distrito(d: Dictionary) -> bool:
+		var edificios: Array = d.get("edificios", [])
+		var estandar := 0
+		for edificio in edificios:
+			if edificio in ["Ancient Walls", "Medieval Walls", "Modern Walls"]:
+				continue
+			var datos_edif: Dictionary = Constantes.DATOS_EDIFICIOS.get(edificio, {})
+			if datos_edif.get("full_tile", false):
+				return true
+			estandar += 1
+		return estandar >= 2
+
+	static func _rendimientos_vacios() -> Dictionary:
+		return {
+			"Food": 0,
+			"Production": 0,
+			"Gold": 0,
+			"Culture": 0,
+			"Science": 0,
+			"Happiness": 0,
+			"Influence": 0
+		}
+
+	static func _copiar_rendimiento(origen: Dictionary) -> Dictionary:
+		var resultado := _rendimientos_vacios()
+		for clave in resultado.keys():
+			resultado[clave] = int(origen.get(clave, 0))
+		return resultado
+
+	static func _merge(destino: Dictionary, origen: Dictionary) -> void:
+		for clave in origen.keys():
+			destino[clave] = int(destino.get(clave, 0)) + int(origen[clave])
+
 
 class HexMath:
 
@@ -3849,14 +4164,18 @@ class ReglasJuego:
 	static func es_mejora_valida(coord: Vector2i, mejora_nombre: String, asent_centro: Vector2i, city_grid: Dictionary, era_actual: String = "Antiquity", civ_actual: String = "None", tipo_asentamiento: String = "Town") -> bool:
 		if not city_grid.has(coord): return false
 		if city_grid[coord].get("ajeno", false): return false
-		if HexMath.dist_hex(coord, asent_centro) > 3: return false
-	
+
 		var datos = city_grid[coord]
-		# Maravillas naturales: no admiten ninguna mejora salvo la "Expedition Base".
-		# (Regla recuperada de la copia duplicada que existia en Main antes de unificar.)
+		# Maravillas naturales: solo admiten la base de expedición, y este caso
+		# se resuelve antes de las restricciones generales de anillo/era para
+		# garantizar que toda celda de maravilla reclamada pueda activarse.
 		var es_maravilla_natural = (datos.get("caracteristica", "") == "NATURAL_WONDER" or datos.get("terreno", "") == "NATURAL_WONDER")
-		if es_maravilla_natural and mejora_nombre != "Expedition Base":
-			return false
+		if es_maravilla_natural:
+			var mejora_actual = str(datos.get("mejora_tipo", ""))
+			return mejora_nombre == MaravillasNaturales.MEJORA_ACTIVACION \
+				and mejora_actual in ["", MaravillasNaturales.MEJORA_ACTIVACION]
+
+		if HexMath.dist_hex(coord, asent_centro) > 3: return false
 
 
 		var t = datos.get("terreno", "").strip_edges().to_upper()
@@ -4194,7 +4513,11 @@ class GestorPincel:
 		if not main.city_grid.has(main.celda_seleccionada): return
 		var datos = main.city_grid[main.celda_seleccionada]
 		if celda_tiene_desarrollo(datos): return
-	
+		# Validación: bioma/terreno, límite de casillas por asentamiento y
+		# exclusión de adyacencia frente a maravillas naturales distintas
+		# (la lista de disponibles ya filtra las que infringen la regla).
+		if not (maravilla_nombre in main.listar_maravillas_disponibles_celda(main.celda_seleccionada)): return
+
 		datos.caracteristica = "NATURAL_WONDER"
 		datos.recurso = maravilla_nombre
 		main.actualizar_botones_recursos_ui()
@@ -4209,10 +4532,14 @@ class GestorPincel:
 		var datos = main.city_grid[main.celda_seleccionada]
 		datos.caracteristica = "NONE"
 		datos.recurso = ""
+		# La mejora de activación solo tiene sentido sobre la maravilla.
+		if datos.get("mejora_tipo", "") == MaravillasNaturales.MEJORA_ACTIVACION:
+			datos.mejora_tipo = ""
 		main.actualizar_icono_celda(main.celda_seleccionada)
 		main.actualizar_panel_ui()
 		main.guardar_partida_actual()
 		main.queue_redraw()
+
 
 	static func toggle_rio_celda(main: Node2D):
 		if not main.city_grid.has(main.celda_seleccionada): return
@@ -4423,16 +4750,23 @@ class GestorConstruccion:
 	static func aplicar_mejora(main: Node2D, tipo: String):
 		if not main.city_grid.has(main.celda_seleccionada): return
 		var datos = main.city_grid[main.celda_seleccionada]
-	
+
+		if main.asentamientos.size() == 0 or main.asentamiento_activo_idx >= main.asentamientos.size(): return
+		var asent_centro = main.asentamientos[main.asentamiento_activo_idx].centro
+		var asent_tipo = main.asentamientos[main.asentamiento_activo_idx].tipo
+		if not ReglasJuego.es_mejora_valida(main.celda_seleccionada, tipo, asent_centro, main.city_grid, main.era_actual, main.civ_actual, asent_tipo):
+			return
+
 		datos.mejora_tipo = tipo
 		verificar_expansion_territorio(main, main.celda_seleccionada)
-	
+
 		main.actualizar_sugerencias_cache()
 		main.actualizar_panel_construccion()
 		main.actualizar_icono_celda(main.celda_seleccionada)
 		main.actualizar_panel_ui()
 		main.guardar_partida_actual()
 		main.queue_redraw()
+
 
 	static func borrar_edificio_especifico(main: Node2D, edificio_nombre: String):
 		if not main.city_grid.has(main.celda_seleccionada): return
@@ -4555,10 +4889,10 @@ class GestorAsentamientos:
 				hbox_recurso.visible = false
 				main.add_child(hbox_recurso)
 			
-				var hbox_terreno = HBoxContainer.new()
-				hbox_terreno.custom_minimum_size = Vector2(40, 40)
-				hbox_terreno.alignment = BoxContainer.ALIGNMENT_CENTER
-				hbox_terreno.position = centro_px - Vector2(20, -main.radio_hex * 0.15)
+				var hbox_terreno = Label.new()
+				hbox_terreno.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				hbox_terreno.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+				hbox_terreno.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				hbox_terreno.visible = false
 				main.add_child(hbox_terreno)
 			
@@ -4829,10 +5163,10 @@ class GestorArchivos:
 				hbox_recurso.visible = false
 				main.add_child(hbox_recurso)
 			
-				var hbox_terreno = HBoxContainer.new()
-				hbox_terreno.custom_minimum_size = Vector2(40, 40)
-				hbox_terreno.alignment = BoxContainer.ALIGNMENT_CENTER
-				hbox_terreno.position = centro_px - Vector2(20, -main.radio_hex * 0.15)
+				var hbox_terreno = Label.new()
+				hbox_terreno.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+				hbox_terreno.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+				hbox_terreno.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				hbox_terreno.visible = false
 				main.add_child(hbox_terreno)
 			
