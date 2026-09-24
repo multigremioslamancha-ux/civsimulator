@@ -1,5 +1,39 @@
 extends Node2D
 
+# ==============================================================================
+# CIV7 - ARCHIVO PRINCIPAL UNIFICADO
+# ------------------------------------------------------------------------------
+# Este archivo contiene TODA la logica del juego y de la interfaz:
+#   1) La clase principal (Main, extends Node2D) con el estado de la partida,
+#      los paneles, la entrada, el dibujo del mapa y las pantallas.
+#   2) Los MODULOS INTERNOS (clases anidadas al final del archivo), que antes
+#      eran scripts sueltos cargados como autoloads:
+#         HexMath            -> matematicas de hexagonos
+#         ReglasJuego        -> reglas/validaciones puras del juego
+#         GestorPincel       -> edicion de terreno (bioma, recurso, rio...)
+#         GestorConstruccion -> construccion de edificios y mejoras + sugerencias
+#         GestorAsentamientos-> ciclo de vida de asentamientos y eras
+#         GestorArchivos     -> guardado/carga de partidas (JSON)
+#         GestorDialogos     -> dialogos modales (lider, era, renombrar...)
+#         GestorInterfaz     -> construccion del arbol de interfaz
+#
+# Los datos estaticos (lideres, edificios, mejoras, maravillas, civilizaciones,
+# recursos, biomas...) NO viven aqui: se leen de "Constantes.gd".
+#
+# INDICE DEL ARCHIVO
+#   - ESTADO DE LA PARTIDA Y REFERENCIAS DE UI .... variables de la clase
+#   - ARRANQUE .................................... _ready()
+#   - API DE DELEGACION (puentes hacia los modulos internos, usada por la UI)
+#   - LOGICA LOCAL (camara, adyacencias, agua dulce, validadores auxiliares)
+#   - CONSTRUCCION DE UI (botones, iconos, tooltips, listas)
+#   - PANELES (pincel, construccion, externos, asentamientos, maravillas,
+#     estadisticas y recuentos)
+#   - NAVEGACION Y ENTRADA (cambiar_seccion, _process, _input, _unhandled_input)
+#   - DIBUJO DEL MAPA (_draw, actualizar_icono_celda, actualizar_iconos_todos)
+#   - PANTALLAS (partidas guardadas, estadisticas)
+#   - MODULOS INTERNOS (clases anidadas al final del archivo)
+# ==============================================================================
+
 var panel_estadisticas: MarginContainer
 var grid_estadisticas: GridContainer
 var lider_actual: String = "Augustus"
@@ -30,14 +64,15 @@ var btn_menu_asentamientos: Button
 var btn_menu_maravillas: Button
 var btn_modo_construccion: Button
 var btn_modo_externos: Button
+var btn_menu_felicidad: Button
 
 var panel_biomas: Control
 var scroll_biomas: ScrollContainer
 var grid_biomas: GridContainer
 var grid_terrenos: GridContainer
 var grid_carac: GridContainer
-var hbox_favs: HBoxContainer
 var panel_maravillas: Control
+var panel_felicidad: Control
 var grid_maravillas_naturales: GridContainer
 
 var panel_construccion: VBoxContainer
@@ -96,13 +131,14 @@ func _ready() -> void:
 	btn_menu_maravillas = refs.get("btn_menu_maravillas")
 	btn_modo_construccion = refs.get("btn_modo_construccion")
 	btn_modo_externos = refs.get("btn_modo_externos")
+	btn_menu_felicidad = refs.get("btn_menu_felicidad")
 	panel_biomas = refs.get("panel_biomas")
 	scroll_biomas = refs.get("scroll_biomas")
 	grid_biomas = refs.get("grid_biomas")
 	grid_terrenos = refs.get("grid_terrenos")
 	grid_carac = refs.get("grid_carac")
-	hbox_favs = refs.get("hbox_favs")
 	panel_maravillas = refs.get("panel_maravillas")
+	panel_felicidad = refs.get("panel_felicidad")
 	grid_maravillas_naturales = refs.get("grid_maravillas_naturales")
 	panel_construccion = refs.get("panel_construccion")
 	grid_recursos = refs.get("grid_recursos")
@@ -145,11 +181,11 @@ func _ready() -> void:
 	mostrar_pantalla_partidas_guardadas()
 
 # ==============================================================================
-# PUENTES DE DELEGACIÓN (LLAMADAS A LOS GESTORES)
+# API DE DELEGACIÓN: PUENTES HACIA LOS MÓDULOS INTERNOS (LOS INVOCA LA UI)
 # ==============================================================================
 
 func guardar_partida_actual(): GestorArchivos.guardar_partida_actual(self)
-func cargar_partida_especifica(nombre: String): GestorArchivos.cargar_partida_especifica(self, nombre)
+func cargar_partida_especifica(nombre: String) -> bool: return GestorArchivos.cargar_partida_especifica(self, nombre)
 func mostrar_dialogo_cargar(): GestorArchivos.mostrar_dialogo_cargar(self)
 
 func celda_tiene_desarrollo(datos: Dictionary) -> bool:
@@ -160,7 +196,6 @@ func _aplicar_caracteristica(c: String): GestorPincel.aplicar_caracteristica(sel
 func _aplicar_recurso(recurso_nombre: String): GestorPincel.aplicar_recurso(self, recurso_nombre)
 func _aplicar_maravilla_natural(maravilla_nombre: String): GestorPincel.aplicar_maravilla_natural(self, maravilla_nombre)
 func _borrar_maravilla_natural(): GestorPincel.borrar_maravilla_natural(self)
-func _marcar_favorita(val: int): GestorPincel.marcar_favorita(self, val)
 func _toggle_rio_celda(): GestorPincel.toggle_rio_celda(self)
 
 func actualizar_sugerencias_cache(): 
@@ -199,6 +234,7 @@ func centrar_camara_en_activo():
 			"EXTERNOS": panel_activo = panel_externos
 			"ASENTAMIENTOS": panel_activo = panel_asentamientos_ui
 			"MARAVILLAS": panel_activo = panel_maravillas
+			"FELICIDAD": panel_activo = panel_felicidad
 			
 		var panel_w = 0.0
 		if panel_activo and panel_activo is Control and panel_activo.visible:
@@ -227,6 +263,7 @@ func mostrar_dialogo_guardar_como():
 		if nuevo_nombre != "":
 			partida_actual_nombre = nuevo_nombre
 			guardar_partida_actual()
+			actualizar_panel_gestion_ui()
 		centrar_camara_en_activo()
 		dialog.queue_free()
 	)
@@ -234,8 +271,9 @@ func mostrar_dialogo_guardar_como():
 		centrar_camara_en_activo()
 		dialog.queue_free()
 	)
-	get_tree().root.add_child(dialog)
-	dialog.popup_centered(Vector2(320, 160))
+	# Apertura centralizada: garantiza un único modal activo y evita el error
+	# "Attempting to make child window exclusive...".
+	GestorInterfaz.abrir_modal(self, dialog, null, false, Vector2(320, 160))
 
 func es_mejora_compatible_con_recurso(mej_nombre: String, recurso: String, era: String) -> bool:
 	var rec_lower = recurso.strip_edges().to_lower()
@@ -1141,15 +1179,12 @@ func actualizar_panel_pincel():
 	if celda_tiene_desarrollo(d):
 		for child in grid_biomas.get_children(): child.queue_free()
 		for child in grid_carac.get_children(): child.queue_free()
-		if hbox_favs:
-			for child in hbox_favs.get_children(): child.queue_free()
 		if grid_terrenos: grid_terrenos.visible = false
 		return
 
 	var b_actual = d.bioma
 	var t_actual = d.terreno
 	var c_actual = d.get("caracteristica", "NONE")
-	var f_actual = d.get("favorita", 0)
 	
 	var es_centro_gob = d.edificios.has("Palace") or d.edificios.has("Town Hall")
 
@@ -1338,44 +1373,6 @@ func actualizar_panel_pincel():
 		)
 		grid_carac.add_child(btn_unclaim)
 
-	if hbox_favs:
-		for child in hbox_favs.get_children(): child.queue_free()
-		var path_felicidad = resolver_ruta_asset("Happiness B.")
-		
-		var btn_0 = _crear_btn_opcion("Normal", Color(0.5, 0.5, 0.5), f_actual == 0)
-		btn_0.pressed.connect(func(): _marcar_favorita(0))
-		hbox_favs.add_child(btn_0)
-		
-		var btn_1 = _crear_btn_opcion("", Color(0.56, 0.93, 0.56), f_actual == 1)
-		if ResourceLoader.exists(path_felicidad):
-			btn_1.icon = load(path_felicidad)
-			btn_1.expand_icon = true
-			btn_1.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		else:
-			btn_1.text = "+1"
-		btn_1.pressed.connect(func(): _marcar_favorita(1))
-		hbox_favs.add_child(btn_1)
-		
-		var btn_2 = _crear_btn_opcion("", Color(0.13, 0.54, 0.13), f_actual == 2)
-		if ResourceLoader.exists(path_felicidad):
-			var hb = HBoxContainer.new()
-			hb.set_anchors_preset(Control.PRESET_FULL_RECT)
-			hb.alignment = BoxContainer.ALIGNMENT_CENTER
-			hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			var tex = load(path_felicidad)
-			for i in range(2):
-				var tex_rect_icon = TextureRect.new()
-				tex_rect_icon.texture = tex
-				tex_rect_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-				tex_rect_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-				tex_rect_icon.custom_minimum_size = Vector2(24, 24)
-				tex_rect_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				hb.add_child(tex_rect_icon)
-			btn_2.add_child(hb)
-		else:
-			btn_2.text = "+2"
-		btn_2.pressed.connect(func(): _marcar_favorita(2))
-		hbox_favs.add_child(btn_2)
 
 		# ==============================================================================
 		# DESPLEGABLE MARAVILLAS NATURALES
@@ -1443,124 +1440,6 @@ func actualizar_panel_pincel():
 				# Mover el contenedor al final del panel
 				parent_container.move_child(vbox_nw, -1)
 
-
-func es_mejora_valida(coord: Vector2i, mejora_nombre: String, asent_centro: Vector2i, city_grid: Dictionary, era_actual: String = "Antiquity", civ_actual: String = "None", tipo_asentamiento: String = "Town") -> bool:
-	if not city_grid.has(coord): return false
-	if city_grid[coord].get("ajeno", false): return false
-	if HexMath.dist_hex(coord, asent_centro) > 3: return false
-	
-	var datos = city_grid[coord]
-	
-	# ==============================================================================
-	# RESTRICCIÓN ESTRICTA DE CONSTRUCCIÓN: MARAVILLAS NATURALES
-	# ==============================================================================
-	var es_maravilla_natural = (datos.get("caracteristica", "") == "NATURAL_WONDER" or datos.get("terreno", "") == "NATURAL_WONDER")
-	
-	if es_maravilla_natural:
-		if mejora_nombre != "Expedition Base":
-			return false
-	else:
-		if mejora_nombre == "Expedition Base":
-			return false
-	# ==============================================================================
-	
-	var t = datos.get("terreno", "").strip_edges().to_upper()
-	
-	# EXCEPCIÓN AL BLOQUEO DE MONTAÑAS:
-	# Si estamos en Antiquity y es montaña, se bloquea todo...
-	# EXCEPTO si la montaña es en realidad una Maravilla Natural.
-	if era_actual == "Antiquity" and t in ["MOUNTAINOUS", "MONTAÑA"]:
-		if not es_maravilla_natural:
-			return false
-			
-	var b = datos.get("bioma", "").strip_edges().to_upper()
-	var f = datos.get("caracteristica", "NONE").strip_edges().to_upper()
-	var res = datos.get("recurso", "")
-	var rio = datos.get("rio", false)
-
-	var adyacentes_misma_mejora = 0
-	var distritos_adyacentes = 0
-	var celdas_coastal_adyacentes = 0
-	var rio_adyacente = rio
-
-	for vec in HexMath.VECINOS_HEX:
-		var n = coord + vec
-		if city_grid.has(n):
-			if city_grid[n].get("mejora_tipo", "") == mejora_nombre: adyacentes_misma_mejora += 1
-			var bld_count = 0
-			for e in city_grid[n].edificios:
-				if not es_edificio_muralla(e) and not es_edificio_obsoleto(e, n, era_actual, city_grid): bld_count += 1
-			if bld_count >= 2: distritos_adyacentes += 1
-			if city_grid[n].get("terreno", "").strip_edges().to_upper() in ["COASTAL", "COSTA"]: celdas_coastal_adyacentes += 1
-			if city_grid[n].get("rio", false): rio_adyacente = true
-
-	match mejora_nombre:
-		"Quarry":
-			if era_actual == "Modern Age": return res in ["Jade", "Kaolin", "Limestone", "Marble"]
-			elif era_actual == "Exploration": return res in ["Gypsum", "Jade", "Kaolin", "Limestone", "Marble"]
-			else: return res in ["Gypsum", "Jade", "Kaolin", "Marble", "Limestone"]
-		"Clay Pit":
-			if era_actual == "Modern Age": return f == "WET" or t in ["HUMEDO", "WET"]
-			else: return f == "WET" or t in ["HUMEDO", "WET"] or res == "Clay"
-		"Expedition Base":
-			if era_actual == "Exploration" and civ_actual == "Incan": return f == "NATURAL_WONDER" or t in ["MOUNTAINOUS", "MONTAÑA"]
-			elif era_actual == "Modern Age": return f == "NATURAL_WONDER" or t in ["MOUNTAINOUS", "MONTAÑA"]
-			else: return f == "NATURAL_WONDER"
-		"Farm": return t in ["FLAT", "PLANO"]
-		"Woodcutter":
-			if era_actual == "Antiquity": return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res == "Hardwood"
-			elif era_actual == "Exploration": return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res in ["Cocoa", "Hardwood", "Spices"]
-			else: return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res in ["Cocoa", "Hardwood", "Quinine", "Rubber", "Spices"]
-		"Fishing Boat":
-			var val_water = (t in ["COASTAL", "COSTA", "NAVIGABLE_RIVER", "RIO_NAVEGABLE"]) and not rio
-			if era_actual == "Antiquity": return val_water or res in ["Cowrie", "Crabs", "Dyes", "Fish", "Pearls", "Turtles"]
-			elif era_actual == "Exploration": return val_water or res in ["Cowrie", "Crabs", "Dyes", "Fish", "Pearls", "Turtles", "Whales"]
-			else: return val_water or res in ["Cowrie", "Crabs", "Fish", "Pearls", "Whales"]
-		"Mine":
-			if era_actual == "Antiquity": return t in ["ROUGH", "ABRUPTO"] or res in ["Gold", "Iron", "Rubies", "Salt", "Silver", "Tin"]
-			elif era_actual == "Exploration": return t in ["ROUGH", "ABRUPTO"] or res in ["Gold", "Iron", "Rubies", "Silver", "Niter", "Tin"]
-			else: return t in ["ROUGH", "ABRUPTO"] or res in ["Coal", "Gold", "Iron", "Niter", "Silver", "Tin"]
-		"Camp":
-			if era_actual == "Antiquity": return res in ["Ivory", "Camels", "Hides", "Wild Game"]
-			elif era_actual == "Exploration": return res in ["Camels", "Furs", "Ivory", "Truffles", "Wild Game"]
-			else: return res in ["Furs", "Ivory", "Truffles"]
-		"Pasture": return res in ["Horses", "Llamas", "Wool"] if era_actual == "Antiquity" else res in ["Horses", "Llamas"]
-		"Plantation":
-			if era_actual == "Antiquity": return res in ["Cotton", "Dates", "Flax", "Incense", "Mangoes", "Rice", "Silk", "Wine"]
-			elif era_actual == "Exploration": return res in ["Cotton", "Dates", "Flax", "Incense", "Mangoes", "Rice", "Silk", "Sugar", "Tea", "Wine"]
-			else: return res in ["Citrus", "Coffee", "Cotton", "Rice", "Silk", "Sugar", "Tea", "Tobacco", "Wine"]
-		"Oil Rig": return res == "Oil"
-		"Baray": return t in ["FLAT", "PLANO"] and adyacentes_misma_mejora == 0
-		"Great Wall", "Ming Great Wall": return adyacentes_misma_mejora <= 2
-		"Hawilt", "Poktop", "Megalith": return t in ["FLAT", "PLANO"]
-		"Jinja": return true
-		"Pairidaeza", "Emporium", "Yakhchal", "Tea House", "Hidden Fortress", "Mawaskawe Skote", "Water Puppet Theater", "Company Post", "Stepwell", "Abattoir", "Entrepot", "Institute", "Circus Fair":
-			if adyacentes_misma_mejora > 0: return false
-			if mejora_nombre == "Yakhchal": return b == "DESERT"
-			if mejora_nombre == "Tea House" or mejora_nombre == "Stepwell": return t in ["FLAT", "PLANO"]
-			if mejora_nombre == "Hidden Fortress": return t in ["ROUGH", "ABRUPTO"]
-			if mejora_nombre == "Mawaskawe Skote": return f in ["VEGETATED", "VEGETACION"]
-			if mejora_nombre == "Water Puppet Theater": return b != "MARINE" and rio_adyacente
-			if mejora_nombre == "Entrepot": return t in ["NAVIGABLE_RIVER", "RIO_NAVEGABLE"]
-			return true
-		"Festival Grounds": return t in ["FLAT", "PLANO"] and distritos_adyacentes > 0 and adyacentes_misma_mejora == 0
-		"Hillfort": return t in ["ROUGH", "ABRUPTO"]
-		"Step Pyramid", "Stone Head": return datos.get("favorita", 0) == 0
-		"Caravanserai": return b == "DESERT" or b == "PLAINS"
-		"Gama": return f in ["VEGETATED", "VEGETACION"]
-		"Loi Kalo": return b == "GRASSLAND" or b == "TROPICAL"
-		"Ortoo", "Terrace Farm": return t not in ["ROUGH", "ABRUPTO"] and not rio and f == "NONE"
-		"Kasbah": return b == "DESERT"
-		"Minor Embassy": return tipo_asentamiento == "City" or tipo_asentamiento == "Capital"
-		"Monastery": return distritos_adyacentes == 0
-		"Saqiya": return f == "FLOODPLAIN"
-		"Bang": return t in ["NAVIGABLE_RIVER", "RIO_NAVEGABLE"]
-		"Highland Power Station": return f == "NONE" or (t in ["MOUNTAINOUS", "MONTAÑA"] and civ_actual == "Nepalese")
-		"Kabakas Lake", "Open-Air Museum": return t in ["FLAT", "PLANO"]
-		"Obshchina": return adyacentes_misma_mejora == 0
-		"Staatseisenbahn": return true
-		"Shore Battery": return b != "MARINE" and celdas_coastal_adyacentes > 0
-	return true
 
 func _crear_cabecera_panel(texto: String, asset_name: String) -> HBoxContainer:
 	var hbox = HBoxContainer.new()
@@ -2026,14 +1905,20 @@ func actualizar_panel_externos():
 		vbox.add_child(grid_mar)
 
 func cambiar_seccion(nueva_seccion: String):
+	if nueva_seccion == "FELICIDAD" and asentamientos.is_empty():
+		return
 	seccion_actual = nueva_seccion
 	if panel_biomas: panel_biomas.visible = (nueva_seccion == "PINCEL")
 	if panel_construccion: panel_construccion.visible = (nueva_seccion == "CONSTRUCCION")
 	if panel_externos: panel_externos.visible = (nueva_seccion == "EXTERNOS")
 	if panel_asentamientos_ui: panel_asentamientos_ui.visible = (nueva_seccion == "ASENTAMIENTOS")
 	if panel_maravillas: panel_maravillas.visible = (nueva_seccion == "MARAVILLAS")
+	if panel_felicidad:
+		panel_felicidad.visible = (nueva_seccion == "FELICIDAD")
+	_actualizar_etiqueta_felicidad()
 	
-	var mostrar_info = (nueva_seccion != "ASENTAMIENTOS" and nueva_seccion != "EXTERNOS")
+	var es_felicidad = (seccion_actual == "FELICIDAD")
+	var mostrar_info = (nueva_seccion != "ASENTAMIENTOS" and nueva_seccion != "EXTERNOS" and nueva_seccion != "FELICIDAD")
 	if panel_info: panel_info.visible = mostrar_info
 
 	if lbl_info:
@@ -2043,30 +1928,57 @@ func cambiar_seccion(nueva_seccion: String):
 			var dyn_node = padre.get_node_or_null("ContenedorInfoDinamico")
 			if dyn_node: dyn_node.visible = mostrar_info
 
-	if btn_menu_asentamientos: btn_menu_asentamientos.modulate = Color(1.3, 1.3, 1.3) if seccion_actual == "ASENTAMIENTOS" else Color(0.7, 0.7, 0.7)
-	if btn_menu_pincel: btn_menu_pincel.modulate = Color(1.3, 1.3, 1.3) if seccion_actual == "PINCEL" else Color(0.7, 0.7, 0.7)
-	if btn_modo_construccion: btn_modo_construccion.modulate = Color(1.3, 1.3, 1.3) if seccion_actual == "CONSTRUCCION" else Color(0.7, 0.7, 0.7)
-	if btn_modo_externos: btn_modo_externos.modulate = Color(1.3, 1.3, 1.3) if seccion_actual == "EXTERNOS" else Color(0.7, 0.7, 0.7)
-	if btn_menu_maravillas:
-		var es_wonder = city_grid.has(celda_seleccionada) and city_grid[celda_seleccionada].get("caracteristica", "") == "NATURAL_WONDER"
-		btn_menu_maravillas.visible = es_wonder
-		if es_wonder:
-			btn_menu_maravillas.modulate = Color(1.3, 1.3, 1.3) if seccion_actual == "MARAVILLAS" else Color(0.7, 0.7, 0.7)
-
-	if seccion_actual == "PINCEL": actualizar_panel_pincel()
-	elif seccion_actual == "MARAVILLAS": actualizar_panel_maravillas_naturales()
-	elif seccion_actual == "CONSTRUCCION":
+	if nueva_seccion == "PINCEL": actualizar_panel_pincel()
+	elif nueva_seccion == "MARAVILLAS": actualizar_panel_maravillas_naturales()
+	elif nueva_seccion == "CONSTRUCCION":
 		actualizar_sugerencias_cache()
 		actualizar_panel_construccion()
-		actualizar_iconos_todos()
-	elif seccion_actual == "EXTERNOS": actualizar_panel_externos()
-	elif seccion_actual == "ASENTAMIENTOS": actualizar_panel_gestion_ui()
+	elif nueva_seccion == "EXTERNOS": actualizar_panel_externos()
+	elif nueva_seccion == "ASENTAMIENTOS": actualizar_panel_gestion_ui()
 
 	actualizar_iconos_todos()
-	actualizar_visibilidad_boton_externos()
+	_actualizar_botones_navegacion()
 	actualizar_panel_ui()
 	centrar_camara_en_activo()
 	queue_redraw()
+
+# Regla única de visibilidad de los botones del panel vertical:
+# - El botón de la sección activa se oculta (incluidos Felicidad y Maravillas).
+# - Construcción y Externos dependen además de la celda seleccionada:
+#   Construcción se oculta en el anillo 4, Externos solo aparece en celda externa
+#   válida (anillo >= 2, sin desarrollo propio, con terreno/característica aptos).
+# - Maravillas solo existe sobre una maravilla natural (salvo en su propia sección,
+#   donde queda oculto por la regla general); Felicidad siempre visible salvo activo.
+func _actualizar_botones_navegacion() -> void:
+	if btn_menu_asentamientos:
+		btn_menu_asentamientos.visible = (seccion_actual != "ASENTAMIENTOS")
+		btn_menu_asentamientos.modulate = Color(0.7, 0.7, 0.7)
+	if btn_menu_pincel:
+		btn_menu_pincel.visible = (seccion_actual != "PINCEL")
+		btn_menu_pincel.modulate = Color(0.7, 0.7, 0.7)
+	if btn_modo_construccion:
+		btn_modo_construccion.modulate = Color(0.7, 0.7, 0.7)
+		if seccion_actual == "CONSTRUCCION":
+			btn_modo_construccion.visible = false
+		else:
+			actualizar_visibilidad_boton_construccion()
+	if btn_modo_externos:
+		btn_modo_externos.modulate = Color(0.7, 0.7, 0.7)
+		if seccion_actual == "EXTERNOS":
+			btn_modo_externos.visible = false
+		else:
+			actualizar_visibilidad_boton_externos()
+	if btn_menu_felicidad:
+		btn_menu_felicidad.visible = (seccion_actual != "FELICIDAD")
+		btn_menu_felicidad.modulate = Color(0.7, 0.7, 0.7)
+	if btn_menu_maravillas:
+		var es_wonder = city_grid.has(celda_seleccionada) and city_grid[celda_seleccionada].get("caracteristica", "") == "NATURAL_WONDER"
+		if seccion_actual == "MARAVILLAS":
+			btn_menu_maravillas.visible = false
+		else:
+			btn_menu_maravillas.visible = es_wonder
+			if es_wonder:
+				btn_menu_maravillas.modulate = Color(0.7, 0.7, 0.7)
 
 func actualizar_panel_ui():
 	if not lbl_info: return
@@ -2086,21 +1998,6 @@ func actualizar_panel_ui():
 	lbl_info.visible = false
 	for c in dyn_node.get_children(): c.queue_free()
 	
-	var appeal_val = d.get("favorita", 0)
-	if appeal_val > 0:
-		var hbox_appeal = HBoxContainer.new()
-		hbox_appeal.alignment = BoxContainer.ALIGNMENT_END
-		var path_hap = resolver_ruta_asset("Happiness B.")
-		if ResourceLoader.exists(path_hap):
-			for i in range(appeal_val):
-				var tex_rect = TextureRect.new()
-				tex_rect.texture = load(path_hap)
-				tex_rect.custom_minimum_size = Vector2(24, 24)
-				tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-				tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-				hbox_appeal.add_child(tex_rect)
-		dyn_node.add_child(hbox_appeal)
-		
 	var asent_centro = asentamientos[asentamiento_activo_idx].centro if (asentamientos.size() > 0 and asentamiento_activo_idx < asentamientos.size()) else Vector2i.ZERO
 	var es_reclamada = d.get("reclamada", HexMath.dist_hex(celda_seleccionada, asent_centro) <= 1)
 	
@@ -2253,6 +2150,10 @@ func actualizar_panel_ui():
 				if cell.get("caracteristica", "") == "NATURAL_WONDER" or cell.terreno == "NATURAL_WONDER": nw_count += 1
 			for k in yields_sum.keys():
 				if yields_sum[k] > 0: yields_sum[k] += int(yields_sum[k] * 0.5 * nw_count)
+
+	# El atractivo de la celda (visor de felicidad) aporta felicidad directa
+	# a la caja de rendimientos: Atractivo = +1, Encantador = +2.
+	yields_sum["Happiness"] = int(yields_sum.get("Happiness", 0)) + int(d.get("favorita", 0))
 
 	# --- CAJA DE RENDIMIENTOS GENERALES DE LA CELDA ---
 	var panel_y = PanelContainer.new()
@@ -3173,8 +3074,15 @@ func _draw() -> void:
 		var centro = HexMath.cubo_a_pixel(radio_hex, coord.x, coord.y, -coord.x - coord.y)
 		var color_base = Color.LIGHT_GREEN
 		var terreno_upper = datos.terreno.strip_edges().to_upper()
-		
-		if coord == celda_seleccionada: color_base = Color.MAGENTA
+
+		if seccion_actual == "FELICIDAD":
+			# Visor de felicidad: gris = Normal, verde claro = Atractivo, verde oscuro = Encantador.
+			match int(datos.get("favorita", 0)):
+				1: color_base = Color(0.56, 0.93, 0.56)
+				2: color_base = Color(0.13, 0.54, 0.13)
+				_: color_base = Color(0.5, 0.5, 0.5)
+			if coord == celda_seleccionada: color_base = Color.MAGENTA
+		elif coord == celda_seleccionada: color_base = Color.MAGENTA
 		elif Constantes.COLORES_BIOMA.has(datos.bioma):
 			color_base = Constantes.COLORES_BIOMA[datos.bioma]
 			if terreno_upper in ["OCEAN", "OCEANO"]: color_base = Color(0.05, 0.2, 0.5)
@@ -3286,6 +3194,22 @@ func actualizar_icono_celda(coord: Vector2i):
 		for child in datos.nodo_terreno.get_children(): child.queue_free()
 	if is_instance_valid(datos.nodo_icono):
 		for child in datos.nodo_icono.get_children(): child.queue_free()
+
+	# En el visor de felicidad se ocultan todos los iconos del mapa.
+	if seccion_actual == "FELICIDAD":
+		if is_instance_valid(datos.get("nodo_icono")):
+			datos.nodo_icono.visible = false
+		if is_instance_valid(datos.get("nodo_recurso")):
+			datos.nodo_recurso.visible = false
+		if is_instance_valid(datos.get("nodo_terreno")):
+			datos.nodo_terreno.visible = false
+		return
+	if is_instance_valid(datos.get("nodo_icono")):
+		datos.nodo_icono.visible = true
+	if is_instance_valid(datos.get("nodo_recurso")):
+		datos.nodo_recurso.visible = true
+	if is_instance_valid(datos.get("nodo_terreno")):
+		datos.nodo_terreno.visible = true
 	
 	var anadir_elemento_visual = func(container: Control, asset_name: String, nombre_fallback: String, tam_minimo: float, texto_visible: bool = true):
 		var path = ""
@@ -3467,15 +3391,37 @@ func _unhandled_input(event: InputEvent) -> void:
 		var hex = HexMath.pixel_a_cubo(radio_hex, raton_local)
 		if city_grid.has(hex):
 			celda_seleccionada = hex
+			if seccion_actual == "FELICIDAD":
+				ciclar_felicidad_celda(hex)
+				return
 			actualizar_botones_recursos_ui()
 			actualizar_panel_pincel()
 			actualizar_panel_construccion()
 			actualizar_panel_externos()
-			actualizar_visibilidad_boton_externos()
-			actualizar_visibilidad_boton_construccion()
+			_actualizar_botones_navegacion()
 			actualizar_panel_ui()
 			queue_redraw()
 			
+func ciclar_felicidad_celda(coord: Vector2i) -> void:
+	if not city_grid.has(coord): return
+	var d = city_grid[coord]
+	d.favorita = (int(d.get("favorita", 0)) + 1) % 3
+	_actualizar_etiqueta_felicidad()
+	actualizar_iconos_todos()
+	actualizar_panel_ui()
+	guardar_partida_actual()
+	queue_redraw()
+
+
+func _actualizar_etiqueta_felicidad() -> void:
+	if not panel_felicidad or not panel_felicidad.visible: return
+	var lbl_fel = panel_felicidad.get_node_or_null("LblFelicidadInfo")
+	if not lbl_fel: return
+	var f = int(city_grid[celda_seleccionada].get("favorita", 0)) if city_grid.has(celda_seleccionada) else 0
+	var nombre = ["Normal", "Atractivo", "Encantador"][clampi(f, 0, 2)]
+	lbl_fel.text = "Celda: %s (%s).\nClica para ciclar: Normal → Atractivo → Encantador.\nGris = Normal, verde claro = Atractivo, verde oscuro = Encantador." % [str(celda_seleccionada), nombre]
+
+
 func actualizar_visibilidad_boton_construccion():
 	if not btn_modo_construccion: return
 	if asentamientos.size() == 0 or asentamiento_activo_idx >= asentamientos.size(): return
@@ -3486,6 +3432,10 @@ func actualizar_visibilidad_boton_construccion():
 	btn_modo_construccion.visible = not es_ring_4
 	if es_ring_4 and seccion_actual == "CONSTRUCCION":
 		cambiar_seccion("EXTERNOS" if es_celda_externos_valida() else "ASENTAMIENTOS")
+
+# ==============================================================================
+# PANTALLAS (partidas guardadas y estadísticas)
+# ==============================================================================
 
 func mostrar_pantalla_partidas_guardadas():
 	if panel_construccion: panel_construccion.visible = false
@@ -3616,6 +3566,7 @@ func _controlar_botones_navegacion(mostrar: bool):
 	if btn_menu_maravillas: btn_menu_maravillas.visible = mostrar
 	if btn_modo_construccion: btn_modo_construccion.visible = mostrar
 	if btn_modo_externos: btn_modo_externos.visible = mostrar
+	if btn_menu_felicidad: btn_menu_felicidad.visible = mostrar
 
 func _crear_panel_estadisticas():
 	var canvas_hud = CanvasLayer.new()
@@ -3723,17 +3674,2218 @@ func actualizar_panel_estadisticas():
 	arr_e.sort()
 	for e in arr_e: crear_item.call(e, edificios[e])
 
-func es_edificio_valido(coord, edificio_nombre, grid_celdas, era):
-	if not grid_celdas.has(coord): return false
-	var d_c = grid_celdas[coord]
+# ==============================================================================
+# MÓDULOS INTERNOS (antes scripts sueltos cargados como autoloads)
+# ------------------------------------------------------------------------------
+# Se mantienen como clases anidadas con métodos estáticos para no depender de
+# autoloads y para que cada regla exista UNA sola vez. Todos los métodos reciben
+# la instancia principal como primer parámetro ("main"), por lo que conservan
+# exactamente la misma firma y comportamiento que cuando eran archivos aparte.
+#   HexMath             : conversiones y distancias hexagonales.
+#   ReglasJuego         : reglas puras (rendimientos, obsolescencia, validaciones).
+#   GestorPincel        : edición de celdas (bioma, terreno, recurso, río, maravillas).
+#   GestorConstruccion  : edificios, mejoras, contenido externo y sugerencias.
+#   GestorAsentamientos : asentamientos, capital y cambio de era.
+#   GestorArchivos      : persistencia JSON y diálogos de guardado/carga.
+#   GestorDialogos      : diálogos modales (líder, nueva partida, era, sincretismo).
+#   GestorInterfaz      : construcción del árbol de interfaz.
+# ==============================================================================
+
+class HexMath:
+
+	const VECINOS_HEX = [
+		Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 1), 
+		Vector2i(-1, 0), Vector2i(0, -1), Vector2i(1, -1)
+	]
+
+	static func dist_hex(coord1: Vector2i, coord2: Vector2i) -> int:
+		var diff = coord1 - coord2
+		return max(abs(diff.x), abs(diff.y), abs(-diff.x - diff.y))
+
+	static func cubo_a_pixel(radio_hex: float, q: int, r: int, _s: int) -> Vector2:
+		var x = radio_hex * (sqrt(3.0) * q + sqrt(3.0)/2.0 * r)
+		var y = radio_hex * (3.0/2.0 * r)
+		return Vector2(x, y)
+
+	static func pixel_a_cubo(radio_hex: float, punto_pantalla: Vector2) -> Vector2i:
+		var q = (sqrt(3.0)/3.0 * punto_pantalla.x - 1.0/3.0 * punto_pantalla.y) / radio_hex
+		var r = (2.0/3.0 * punto_pantalla.y) / radio_hex
+		var s = -q - r
+		var rq = round(q)
+		var rr = round(r)
+		var rs = round(s)
+		var q_diff = abs(rq - q)
+		var r_diff = abs(rr - r)
+		var s_diff = abs(rs - s)
+		if q_diff > r_diff and q_diff > s_diff: rq = -rr - rs
+		elif r_diff > s_diff: rr = -rq - rs
+		else: rs = -rq - rr
+		return Vector2i(int(rq), int(rr))
+
+	static func obtener_puntos_hex(centro: Vector2, radio_hex: float, escala: float = 1.0) -> PackedVector2Array:
+		var puntos = PackedVector2Array()
+		for i in range(6):
+			var angulo_deg = 60 * i - 30
+			var angulo_rad = deg_to_rad(angulo_deg)
+			puntos.push_back(centro + Vector2(radio_hex * escala * cos(angulo_rad), radio_hex * escala * sin(angulo_rad)))
+		return puntos
+
+
+class ReglasJuego:
+
+	static func obtener_denominacion_celda(bioma: String, terreno: String, caracteristica: String) -> String:
+		if bioma == "MARINE":
+			if terreno == "LAKE" and caracteristica == "AQUATIC": return "Lotus"
+			if terreno == "COASTAL":
+				if caracteristica == "AQUATIC": return "Reef"
+				if caracteristica == "ICE": return "Ice"
+			if terreno == "OCEAN":
+				if caracteristica == "AQUATIC": return "Atoll"
+				if caracteristica == "ICE": return "Ice"
+			return bioma.capitalize() + " " + terreno.capitalize()
 	
-	# PROHIBICIÓN TOTAL: Las maravillas naturales no admiten edificios ni maravillas normales
-	var es_maravilla_natural = (d_c.get("caracteristica", "") == "NATURAL_WONDER" or d_c.get("terreno", "") == "NATURAL_WONDER")
-	if es_maravilla_natural:
-		return false
+		if bioma == "TUNDRA":
+			if caracteristica == "VEGETATED": return "Taiga"
+			if caracteristica == "WET": return "Tundra Bog"
+			if caracteristica == "FLOODPLAIN": return "Tundra Floodplain"
+		elif bioma == "GRASSLAND":
+			if caracteristica == "VEGETATED": return "Forest"
+			if caracteristica == "WET": return "Marsh"
+			if caracteristica == "FLOODPLAIN": return "Grassland Floodplain"
+		elif bioma == "PLAINS":
+			if caracteristica == "VEGETATED": return "Savanna Woodland"
+			if caracteristica == "WET": return "Watering Hole"
+			if caracteristica == "FLOODPLAIN": return "Plains Floodplain"
+		elif bioma == "DESERT":
+			if caracteristica == "VEGETATED": return "Sagebrush Steppe"
+			if caracteristica == "WET": return "Oasis"
+			if caracteristica == "FLOODPLAIN": return "Desert Floodplain"
+		elif bioma == "TROPICAL":
+			if caracteristica == "VEGETATED": return "Rainforest"
+			if caracteristica == "WET": return "Mangrove"
+			if caracteristica == "FLOODPLAIN": return "Tropical Floodplain"
 		
-	# Comprobaciones estándar de edificios
-	if not "DATOS_EDIFICIOS" in Constantes or not Constantes.DATOS_EDIFICIOS.has(edificio_nombre):
-		return false
+		var result = bioma.capitalize() + " " + terreno.capitalize()
+		if caracteristica != "NONE":
+			result += " " + caracteristica.capitalize()
+		return result
+
+	static func calcular_rendimiento_celda(bioma: String, terreno: String, caracteristica: String, recurso: String, _rio: bool, _era_actual: String) -> Dictionary:
+		var rendimiento = {
+			"Food": 0,
+			"Production": 0,
+			"Gold": 0,
+			"Culture": 0,
+			"Science": 0,
+			"Happiness": 0,
+			"Influence": 0
+		}
+	
+		var b = bioma.strip_edges().to_upper()
+		var t = terreno.strip_edges().to_upper()
+		var c = caracteristica.strip_edges().to_upper()
+	
+		match b:
+			"GRASSLAND":
+				rendimiento.Food += 2
+			"PLAINS":
+				rendimiento.Food += 1
+				rendimiento.Production += 1
+			"DESERT":
+				rendimiento.Production += 1
+			"TUNDRA":
+				rendimiento.Food += 1
+			"TROPICAL":
+				rendimiento.Food += 2
+			"MARINE":
+				rendimiento.Food += 1
+				rendimiento.Gold += 1
+
+		match t:
+			"ROUGH":
+				rendimiento.Production += 1
+			"MOUNTAINOUS":
+				rendimiento.Production += 2
+			"LAKE":
+				rendimiento.Food += 2
+			"COASTAL":
+				rendimiento.Food += 1
+				rendimiento.Gold += 1
+			"OCEAN":
+				rendimiento.Food += 1
+
+		match c:
+			"VEGETATED":
+				rendimiento.Food += 1
+			"WET":
+				rendimiento.Food += 1
+			"FLOODPLAIN":
+				rendimiento.Food += 2
+			"VOLCANO":
+				rendimiento.Production += 1
+				rendimiento.Science += 1
+
+		if recurso != "" and recurso != "Resource":
+			rendimiento.Gold += 1
+
+		return rendimiento
+
+	# Se eliminan los edificios de Fortificación estándar, limitando Murallas a las estructurales.
+	static func es_edificio_muralla(nombre: String) -> bool:
+		return nombre in ["Ancient Walls", "Medieval Walls", "Modern Walls"]
+
+	static func es_edificio_obsoleto(nombre: String, coord: Vector2i, era_actual: String, city_grid: Dictionary) -> bool:
+		if city_grid.has(coord) and city_grid[coord].get("edificios_dorados", []).has(nombre): return false
+		if not Constantes.DATOS_EDIFICIOS.has(nombre): return false
+		var d = Constantes.DATOS_EDIFICIOS[nombre]
+	
+		var era_edif = d.get("era", "All")
+		if era_edif == "All": return false
+		if Constantes.ORDEN_ERAS.get(era_edif, 0) >= Constantes.ORDEN_ERAS.get(era_actual, 0): return false
+		if d.get("tipo", "") == "Warehouse": return false
+	
+		return true
+
+	static func es_mejora_valida(coord: Vector2i, mejora_nombre: String, asent_centro: Vector2i, city_grid: Dictionary, era_actual: String = "Antiquity", civ_actual: String = "None", tipo_asentamiento: String = "Town") -> bool:
+		if not city_grid.has(coord): return false
+		if city_grid[coord].get("ajeno", false): return false
+		if HexMath.dist_hex(coord, asent_centro) > 3: return false
+	
+		var datos = city_grid[coord]
+		# Maravillas naturales: no admiten ninguna mejora salvo la "Expedition Base".
+		# (Regla recuperada de la copia duplicada que existia en Main antes de unificar.)
+		var es_maravilla_natural = (datos.get("caracteristica", "") == "NATURAL_WONDER" or datos.get("terreno", "") == "NATURAL_WONDER")
+		if es_maravilla_natural and mejora_nombre != "Expedition Base":
+			return false
+
+
+		var t = datos.get("terreno", "").strip_edges().to_upper()
+	
+		if era_actual == "Antiquity" and t in ["MOUNTAINOUS", "MONTAÑA"]: 
+			return false
 		
-	return true
+		var b = datos.get("bioma", "").strip_edges().to_upper()
+		var f = datos.get("caracteristica", "NONE").strip_edges().to_upper()
+		var res = datos.get("recurso", "")
+		var rio = datos.get("rio", false)
+
+		var adyacentes_misma_mejora = 0
+		var distritos_adyacentes = 0
+		var celdas_coastal_adyacentes = 0
+		var rio_adyacente = rio
+
+		for vec in HexMath.VECINOS_HEX:
+			var n = coord + vec
+			if city_grid.has(n):
+				if city_grid[n].get("mejora_tipo", "") == mejora_nombre: adyacentes_misma_mejora += 1
+				var bld_count = 0
+				for e in city_grid[n].edificios:
+					if not es_edificio_muralla(e) and not es_edificio_obsoleto(e, n, era_actual, city_grid): bld_count += 1
+				if bld_count >= 2: distritos_adyacentes += 1
+				if city_grid[n].get("terreno", "").strip_edges().to_upper() in ["COASTAL", "COSTA"]: celdas_coastal_adyacentes += 1
+				if city_grid[n].get("rio", false): rio_adyacente = true
+
+		match mejora_nombre:
+			"Quarry":
+				if era_actual == "Modern Age": return res in ["Jade", "Kaolin", "Limestone", "Marble"]
+				elif era_actual == "Exploration": return res in ["Gypsum", "Jade", "Kaolin", "Limestone", "Marble"]
+				else: return res in ["Gypsum", "Jade", "Kaolin", "Marble", "Limestone"]
+			"Clay Pit":
+				if era_actual == "Modern Age": return f == "WET" or t in ["HUMEDO", "WET"]
+				else: return f == "WET" or t in ["HUMEDO", "WET"] or res == "Clay"
+			"Expedition Base":
+				if era_actual == "Exploration" and civ_actual == "Incan": return f == "NATURAL_WONDER" or t in ["MOUNTAINOUS", "MONTAÑA"]
+				elif era_actual == "Modern Age": return f == "NATURAL_WONDER" or t in ["MOUNTAINOUS", "MONTAÑA"]
+				else: return f == "NATURAL_WONDER"
+			"Farm": return t in ["FLAT", "PLANO"]
+			"Woodcutter":
+				if era_actual == "Antiquity": return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res == "Hardwood"
+				elif era_actual == "Exploration": return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res in ["Cocoa", "Hardwood", "Spices"]
+				else: return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res in ["Cocoa", "Hardwood", "Quinine", "Rubber", "Spices"]
+			"Fishing Boat":
+				var val_water = (t in ["COASTAL", "COSTA", "NAVIGABLE_RIVER", "RIO_NAVEGABLE"]) and not rio
+				if era_actual == "Antiquity": return val_water or res in ["Cowrie", "Crabs", "Dyes", "Fish", "Pearls", "Turtles"]
+				elif era_actual == "Exploration": return val_water or res in ["Cowrie", "Crabs", "Dyes", "Fish", "Pearls", "Turtles", "Whales"]
+				else: return val_water or res in ["Cowrie", "Crabs", "Fish", "Pearls", "Whales"]
+			"Mine":
+				if era_actual == "Antiquity": return t in ["ROUGH", "ABRUPTO"] or res in ["Gold", "Iron", "Rubies", "Salt", "Silver", "Tin"]
+				elif era_actual == "Exploration": return t in ["ROUGH", "ABRUPTO"] or res in ["Gold", "Iron", "Rubies", "Silver", "Niter", "Tin"]
+				else: return t in ["ROUGH", "ABRUPTO"] or res in ["Coal", "Gold", "Iron", "Niter", "Silver", "Tin"]
+			"Camp":
+				if era_actual == "Antiquity": return res in ["Ivory", "Camels", "Hides", "Wild Game"]
+				elif era_actual == "Exploration": return res in ["Camels", "Furs", "Ivory", "Truffles", "Wild Game"]
+				else: return res in ["Furs", "Ivory", "Truffles"]
+			"Pasture": return res in ["Horses", "Llamas", "Wool"] if era_actual == "Antiquity" else res in ["Horses", "Llamas"]
+			"Plantation":
+				if era_actual == "Antiquity": return res in ["Cotton", "Dates", "Flax", "Incense", "Mangoes", "Rice", "Silk", "Wine"]
+				elif era_actual == "Exploration": return res in ["Cotton", "Dates", "Flax", "Incense", "Mangoes", "Rice", "Silk", "Sugar", "Tea", "Wine"]
+				else: return res in ["Citrus", "Coffee", "Cotton", "Rice", "Silk", "Sugar", "Tea", "Tobacco", "Wine"]
+			"Oil Rig": return res == "Oil"
+			"Baray": return t in ["FLAT", "PLANO"] and adyacentes_misma_mejora == 0
+			"Great Wall", "Ming Great Wall": return adyacentes_misma_mejora <= 2
+			"Hawilt", "Poktop", "Megalith": return t in ["FLAT", "PLANO"]
+			"Jinja": return true
+			"Pairidaeza", "Emporium", "Yakhchal", "Tea House", "Hidden Fortress", "Mawaskawe Skote", "Water Puppet Theater", "Company Post", "Stepwell", "Abattoir", "Entrepot", "Institute", "Circus Fair":
+				if adyacentes_misma_mejora > 0: return false
+				if mejora_nombre == "Yakhchal": return b == "DESERT"
+				if mejora_nombre == "Tea House" or mejora_nombre == "Stepwell": return t in ["FLAT", "PLANO"]
+				if mejora_nombre == "Hidden Fortress": return t in ["ROUGH", "ABRUPTO"]
+				if mejora_nombre == "Mawaskawe Skote": return f in ["VEGETATED", "VEGETACION"]
+				if mejora_nombre == "Water Puppet Theater": return b != "MARINE" and rio_adyacente
+				if mejora_nombre == "Entrepot": return t in ["NAVIGABLE_RIVER", "RIO_NAVEGABLE"]
+				return true
+			"Festival Grounds": return t in ["FLAT", "PLANO"] and distritos_adyacentes > 0 and adyacentes_misma_mejora == 0
+			"Hillfort": return t in ["ROUGH", "ABRUPTO"]
+			"Step Pyramid", "Stone Head": return datos.get("favorita", 0) == 0
+			"Caravanserai": return b == "DESERT" or b == "PLAINS"
+			"Gama": return f in ["VEGETATED", "VEGETACION"]
+			"Loi Kalo": return b == "GRASSLAND" or b == "TROPICAL"
+			"Ortoo", "Terrace Farm": return t not in ["ROUGH", "ABRUPTO"] and not rio and f == "NONE"
+			"Kasbah": return b == "DESERT"
+			"Minor Embassy": return tipo_asentamiento == "City" or tipo_asentamiento == "Capital"
+			"Monastery": return distritos_adyacentes == 0
+			"Saqiya": return f == "FLOODPLAIN"
+			"Bang": return t in ["NAVIGABLE_RIVER", "RIO_NAVEGABLE"]
+			"Highland Power Station": return f == "NONE" or (t in ["MOUNTAINOUS", "MONTAÑA"] and civ_actual == "Nepalese")
+			"Kabakas Lake", "Open-Air Museum": return t in ["FLAT", "PLANO"]
+			"Obshchina": return adyacentes_misma_mejora == 0
+			"Staatseisenbahn": return true
+			"Shore Battery": return b != "MARINE" and celdas_coastal_adyacentes > 0
+		return true
+
+	static func calcular_bono_edificio(coord: Vector2i, nombre_edificio: String, _era_actual: String, city_grid: Dictionary) -> int:
+		if not Constantes.DATOS_EDIFICIOS.has(nombre_edificio): return 0
+		var d = Constantes.DATOS_EDIFICIOS[nombre_edificio]
+	
+		if d.get("tipo", "") == "Warehouse" or d.get("tipo", "") == "Fortification": return 0
+		if d.get("is_wonder", false): return 0
+
+		var rend = d.get("rendimiento", "Production")
+		var bonus = 0
+	
+		for vec in HexMath.VECINOS_HEX:
+			var n = coord + vec
+			if city_grid.has(n):
+				var vd = city_grid[n]
+				var t = vd.get("terreno", "").strip_edges().to_upper()
+				var c = vd.get("caracteristica", "NONE").strip_edges().to_upper()
+			
+				var is_wonder = false
+				for e in vd.edificios:
+					if e == "Marvel" or Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false): is_wonder = true
+				if is_wonder: bonus += 1
+			
+				if rend == "Culture" or rend == "Happiness":
+					if t in ["MOUNTAINOUS", "MONTAÑA"] or t == "NATURAL_WONDER" or c == "NATURAL_WONDER": bonus += 1
+				elif rend == "Gold" or rend == "Food":
+					if t in ["COASTAL", "COSTA", "NAVIGABLE_RIVER", "RIO_NAVEGABLE"]: bonus += 1
+				elif rend == "Science" or rend == "Production":
+					if vd.get("recurso", "") != "": bonus += 1
+
+		var mi_celda = city_grid[coord]
+		var mt = mi_celda.get("terreno", "").strip_edges().to_upper()
+		var mc = mi_celda.get("caracteristica", "NONE").strip_edges().to_upper()
+	
+		if nombre_edificio == "K'uh Nah" and mc in ["VEGETATED", "VEGETACION"]: bonus += 2
+		if nombre_edificio == "Parthenon" and mt in ["ROUGH", "ABRUPTO"]: bonus += 2
+		if nombre_edificio == "Lecture Hall" and mt in ["ROUGH", "ABRUPTO"]: bonus += 1
+		if nombre_edificio == "Motte" and mt in ["ROUGH", "ABRUPTO"]: bonus += 4
+	
+		return bonus
+
+	static func es_ubicacion_valida_para_edificio(coord: Vector2i, edificio_nombre: String, asent_centro: Vector2i, era_actual: String, civ_actual: String, city_grid: Dictionary, tipo_asentamiento: String = "Town", asentamientos: Array = []) -> bool:
+		if not city_grid.has(coord) or city_grid[coord].get("ajeno", false): return false
+		if not Constantes.DATOS_EDIFICIOS.has(edificio_nombre): return false
+		if HexMath.dist_hex(coord, asent_centro) > 3: return false
+	
+		var d = Constantes.DATOS_EDIFICIOS[edificio_nombre]
+		var es_nueva_wonder = d.get("is_wonder", false)
+		var es_nueva_muralla = es_edificio_muralla(edificio_nombre)
+	
+		if es_nueva_wonder and tipo_asentamiento == "Town":
+			return false
+		
+		if es_nueva_wonder:
+			for asent in asentamientos:
+				for c_grid in asent.grid.values():
+					if c_grid.edificios.has(edificio_nombre):
+						return false
+
+		var datos_celda = city_grid[coord]
+		var t = datos_celda.get("terreno", "").strip_edges().to_upper()
+		var c = datos_celda.get("caracteristica", "NONE").strip_edges().to_upper()
+		var es_recurso = (datos_celda.get("recurso", "") != "")
+	
+		if c == "ICE" or t in ["OCEAN", "OCEANO"]: return false
+	
+		if d.get("tipo", "") == "Unique" and tipo_asentamiento == "Town": return false
+		if d.has("civ") and d.civ != civ_actual: return false
+	
+		var is_full_tile = d.get("full_tile", false) or edificio_nombre in ["Aerodrome", "Rail Station"]
+		if is_full_tile:
+			var tiene_no_obsoleto = false
+			for e in datos_celda.edificios:
+				if not es_edificio_obsoleto(e, coord, era_actual, city_grid): tiene_no_obsoleto = true
+			if tiene_no_obsoleto: return false
+	
+		var edificios_actuales = datos_celda.get("edificios", [])
+		var es_centro = edificios_actuales.has("Palace") or edificios_actuales.has("Town Hall")
+
+		var normales = 0
+		var tiene_wonder = false
+		var tiene_muralla = false
+		var extraibles = 0
+
+		for e in edificios_actuales:
+			if es_edificio_muralla(e):
+				tiene_muralla = true
+			elif Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false):
+				tiene_wonder = true
+			elif e not in ["Palace", "Town Hall"]:
+				normales += 1
+				var e_d = Constantes.DATOS_EDIFICIOS.get(e, {})
+				if e_d.get("tipo", "") != "Warehouse" and not e_d.has("civ"):
+					extraibles += 1
+
+		if es_nueva_muralla:
+			if tiene_muralla: return false
+			var is_urban = normales > 0 or tiene_wonder or es_centro
+			if not is_urban: return false
+
+			var dist = HexMath.dist_hex(coord, asent_centro)
+			if dist > 0:
+				var tiene_vecino_con_muralla = false
+				for vec in HexMath.VECINOS_HEX:
+					var n = coord + vec
+					if city_grid.has(n):
+						for e in city_grid[n].get("edificios", []):
+							if es_edificio_muralla(e):
+								tiene_vecino_con_muralla = true
+								break
+					if tiene_vecino_con_muralla:
+						break
+				if not tiene_vecino_con_muralla:
+					return false
+		else:
+			if es_nueva_wonder:
+				if tiene_wonder or normales > 0 or es_centro: return false
+			else:
+				var max_normales = 1 if es_centro else 2
+				if tiene_wonder: return false
+				if normales >= max_normales and extraibles == 0: return false
+			
+		if not es_nueva_muralla and es_recurso:
+			return false
+		
+		if not es_nueva_muralla:
+			if d.get("no_pair", false) and (normales > 0 or tiene_wonder): return false
+			if d.has("max_one") and d.max_one:
+				for c_datos in city_grid.values():
+					if c_datos.edificios.has(edificio_nombre): return false
+			if d.has("no_adj_same") and d.no_adj_same:
+				for vec in HexMath.VECINOS_HEX:
+					var n = coord + vec
+					if city_grid.has(n) and city_grid[n].edificios.has(edificio_nombre): return false
+			
+		if era_actual == "Antiquity" and t in ["MONTAÑA", "MOUNTAINOUS"]: return false
+	
+		var req_terreno = d.get("req_terreno", [])
+		if req_terreno.size() > 0:
+			var valido = false
+			for req in req_terreno:
+				var req_u = req.strip_edges().to_upper()
+				if req_u == "COSTA": req_u = "COASTAL"
+				elif req_u == "LAGO": req_u = "LAKE"
+				elif req_u == "RIO_NAVEGABLE": req_u = "NAVIGABLE_RIVER"
+				elif req_u == "MONTAÑA": req_u = "MOUNTAINOUS"
+				elif req_u == "PLANO": req_u = "FLAT"
+			
+				if req_u == "COASTAL" and t in ["COASTAL", "COSTA"]: valido = true
+				elif req_u == "NAVIGABLE_RIVER" and t in ["NAVIGABLE_RIVER", "RIO_NAVEGABLE"]: valido = true
+				elif req_u == "LAKE" and t in ["LAKE", "LAGO"]: valido = true
+				elif t == req_u or datos_celda.bioma == req_u or c == req_u: valido = true
+			if not valido: return false
+		else:
+			if t in ["COSTA", "COASTAL", "OCEANO", "OCEAN", "RIO_NAVEGABLE", "NAVIGABLE_RIVER"]: return false
+			
+		if d.get("req_rio", false) and not datos_celda.get("rio", false) and t not in ["RIO_NAVEGABLE", "NAVIGABLE_RIVER"]: return false
+		
+		return true
+
+
+class GestorPincel:
+
+	static func celda_tiene_desarrollo(datos: Dictionary) -> bool:
+		if datos.get("mejora_tipo", "") != "":
+			return true
+		for e in datos.get("edificios", []):
+			if e not in ["Palace", "Town Hall"]:
+				return true
+			if Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false):
+				return true
+		return false
+
+	static func aplicar_bioma_y_terreno(main: Node2D, bioma: String, terreno: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		if celda_tiene_desarrollo(datos): return
+	
+		datos.bioma = bioma
+		datos.terreno = terreno
+	
+		if terreno != "FLAT" and datos.caracteristica in ["WET", "VEGETATED", "FLOODPLAIN"]:
+			datos.caracteristica = "NONE"
+		
+		if terreno in ["MOUNTAINOUS", "NAVIGABLE_RIVER", "OCEAN"]:
+			datos.recurso = ""
+		
+		validar_y_refrescar_pincel(main)
+
+	static func aplicar_caracteristica(main: Node2D, c: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		if celda_tiene_desarrollo(datos): return
+	
+		if c in ["WET", "VEGETATED", "FLOODPLAIN"] and datos.terreno != "FLAT":
+			return
+		datos.caracteristica = c
+		validar_y_refrescar_pincel(main)
+
+	static func validar_y_refrescar_pincel(main: Node2D):
+		var datos = main.city_grid[main.celda_seleccionada]
+	
+		var nom_rec = datos.get("recurso", "")
+		if nom_rec != "" and Constantes.RECURSOS_POR_ERA.has(main.era_actual):
+			var b_actual = datos.bioma
+			var t_actual = datos.terreno
+			var rec_data = Constantes.RECURSOS_POR_ERA[main.era_actual].get(nom_rec, [])
+			var bioma_valido = ("TODOS" in rec_data) or (b_actual in rec_data) or ("AGUAS" in rec_data and t_actual in ["LAKE", "COASTAL", "OCEAN"])
+			if not bioma_valido or t_actual in ["MOUNTAINOUS", "OCEAN", "NAVIGABLE_RIVER"] or datos.caracteristica in ["NATURAL_WONDER", "ICE"]:
+				datos.recurso = ""
+
+		main.actualizar_panel_pincel()
+		main.actualizar_botones_recursos_ui()
+		main.actualizar_sugerencias_cache()
+		main.actualizar_iconos_todos()
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func aplicar_recurso(main: Node2D, recurso_nombre: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		if celda_tiene_desarrollo(datos): return
+	
+		if datos.edificios.has("Palace") or datos.edificios.has("Town Hall") or datos.ajeno: return
+	
+		# Restricción estricta de terreno para recursos
+		if datos.terreno in ["MOUNTAINOUS", "OCEAN", "NAVIGABLE_RIVER"] or datos.caracteristica in ["NATURAL_WONDER", "ICE"]:
+			return
+	
+		datos.recurso = recurso_nombre
+		main.actualizar_botones_recursos_ui()
+		main.actualizar_sugerencias_cache()
+		main.actualizar_iconos_todos()
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func aplicar_maravilla_natural(main: Node2D, maravilla_nombre: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		if celda_tiene_desarrollo(datos): return
+	
+		datos.caracteristica = "NATURAL_WONDER"
+		datos.recurso = maravilla_nombre
+		main.actualizar_botones_recursos_ui()
+		main.actualizar_sugerencias_cache()
+		main.actualizar_iconos_todos()
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func borrar_maravilla_natural(main: Node2D):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		datos.caracteristica = "NONE"
+		datos.recurso = ""
+		main.actualizar_icono_celda(main.celda_seleccionada)
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func toggle_rio_celda(main: Node2D):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		if celda_tiene_desarrollo(datos): return
+	
+		datos.rio = not datos.rio
+		main.actualizar_panel_pincel()
+		main.actualizar_sugerencias_cache()
+		main.actualizar_iconos_todos()
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+
+class GestorConstruccion:
+
+	static func verificar_expansion_territorio(main: Node2D, coord: Vector2i):
+		if main.asentamientos.size() == 0 or main.asentamiento_activo_idx >= main.asentamientos.size(): return
+		var centro = main.asentamientos[main.asentamiento_activo_idx].centro
+		var dist = HexMath.dist_hex(coord, centro)
+	
+		var datos = main.city_grid.get(coord, {})
+		if not datos.get("reclamada", false): return
+	
+		if dist == 1 or dist == 2:
+			for vec in HexMath.VECINOS_HEX:
+				var n = coord + vec
+				if main.city_grid.has(n):
+					var d_n = main.city_grid[n]
+					if not d_n.get("reclamada", false):
+						d_n.reclamada = true
+		elif dist == 3:
+			for vec in HexMath.VECINOS_HEX:
+				var n = coord + vec
+				if main.city_grid.has(n):
+					var dist_n = HexMath.dist_hex(n, centro)
+					if dist_n == 3:
+						var d_n = main.city_grid[n]
+						if not d_n.get("reclamada", false):
+							d_n.reclamada = true
+
+	static func calcular_sugerencias_edificios(main: Node) -> Dictionary:
+		var sugerencias = {}
+		if main.asentamientos.size() == 0 or main.asentamiento_activo_idx >= main.asentamientos.size():
+			return sugerencias
+	
+		var asent = main.asentamientos[main.asentamiento_activo_idx]
+		var asent_centro = asent.centro
+		var asent_tipo = asent.tipo
+		var era = main.era_actual
+		var civ = main.civ_actual
+	
+		var edificios_construidos = {}
+		for c in main.city_grid.values():
+			for e in c.edificios:
+				if not ReglasJuego.es_edificio_obsoleto(e, c.q * Vector2i.RIGHT + c.r * Vector2i.DOWN, era, main.city_grid):
+					edificios_construidos[e] = true
+				
+		var rendimiento_tiene_edificios_disponibles = func(r_tipo: String) -> bool:
+			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
+				var d = Constantes.DATOS_EDIFICIOS[edif_nombre]
+				if d.get("is_generic", false) and d.get("rendimiento", "") == r_tipo:
+					var era_edif = d.get("era", "All")
+					if era_edif == "All" or Constantes.ORDEN_ERAS.get(era_edif, 0) <= Constantes.ORDEN_ERAS.get(era, 0):
+						return true
+					
+			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
+				var d = Constantes.DATOS_EDIFICIOS[edif_nombre]
+				if d.get("is_wonder", false) or d.get("is_generic", false): continue
+				if edif_nombre in ["Palace", "Town Hall"]: continue
+			
+				var rend = d.get("rendimiento", "")
+				var rend_sec = d.get("rendimiento_secundario", "")
+				if rend == r_tipo or rend_sec == r_tipo:
+					var era_edif = d.get("era", "All")
+					if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era, 0): continue
+					if d.has("civ") and d.civ != civ and d.civ != main.civ_sincretismo: continue
+					if edificios_construidos.has(edif_nombre): continue
+					return true
+				
+			return false
+
+		var maravillas_construidas = {}
+		for c in main.city_grid.values():
+			for e in c.edificios:
+				var d_e = Constantes.DATOS_EDIFICIOS.get(e, {})
+				if d_e.get("is_wonder", false):
+					maravillas_construidas[e] = true
+				
+		var top_por_rend = {
+			"Food": [], "Production": [], "Gold": [], "Science": [], "Culture": [], "Happiness": [], "Influence": []
+		}
+		var top_warehouses = []
+	
+		for coord in main.city_grid.keys():
+			var dist = HexMath.dist_hex(coord, asent_centro)
+			if dist < 1 or dist > 3: continue
+		
+			var datos = main.city_grid[coord]
+			if datos.get("ajeno", false): continue
+			if datos.edificios.size() > 0 or datos.mejora_tipo != "": continue
+			if datos.get("caracteristica", "") == "NATURAL_WONDER" or datos.terreno == "NATURAL_WONDER": continue
+		
+			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
+				var d_edif = Constantes.DATOS_EDIFICIOS[edif_nombre]
+				var is_generic = d_edif.get("is_generic", false)
+				var is_warehouse = d_edif.get("tipo", "") == "Warehouse"
+			
+				if not is_generic and not is_warehouse: continue
+			
+				var era_edif = d_edif.get("era", "All")
+				if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era, 0): continue
+				if not ReglasJuego.es_ubicacion_valida_para_edificio(coord, edif_nombre, asent_centro, era, civ, main.city_grid, asent_tipo, main.asentamientos): continue
+			
+				var ady = ReglasJuego.calcular_bono_edificio(coord, edif_nombre, era, main.city_grid)
+				var total = d_edif.get("base", 0) + ady
+			
+				if is_warehouse:
+					top_warehouses.append({"coord": coord, "score": total + ady, "edificio": edif_nombre})
+				elif is_generic:
+					var rend = d_edif.get("rendimiento", "")
+					if top_por_rend.has(rend) and rendimiento_tiene_edificios_disponibles.call(rend):
+						top_por_rend[rend].append({"coord": coord, "score": total, "edificio": edif_nombre})
+					
+		var celdas_optimas_rendimiento = {}
+		for r_key in top_por_rend.keys():
+			var arr = top_por_rend[r_key]
+			arr.sort_custom(func(a, b): return a.score > b.score)
+			var limit = min(3, arr.size())
+			for i in range(limit):
+				if arr[i].score > 0:
+					var c = arr[i].coord
+					celdas_optimas_rendimiento[c] = true
+					if not sugerencias.has(c): sugerencias[c] = []
+					sugerencias[c].append({"edificio": arr[i].edificio})
+				
+		top_warehouses.sort_custom(func(a, b): return a.score > b.score)
+		var count_w = 0
+		for w in top_warehouses:
+			if not celdas_optimas_rendimiento.has(w.coord):
+				if not sugerencias.has(w.coord): sugerencias[w.coord] = []
+				var existe = false
+				for s in sugerencias[w.coord]:
+					if s.edificio == w.edificio: existe = true
+				if not existe:
+					sugerencias[w.coord].append({"edificio": w.edificio})
+					count_w += 1
+				if count_w >= 3: break
+			
+		var maravillas_candidatas = []
+		for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
+			var d_edif = Constantes.DATOS_EDIFICIOS[edif_nombre]
+			if not d_edif.get("is_wonder", false) or d_edif.get("is_generic", false): continue 
+			if maravillas_construidas.has(edif_nombre): continue
+		
+			var era_edif = d_edif.get("era", "All")
+			if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era, 0): continue
+			if d_edif.has("civ") and d_edif.civ != civ and d_edif.civ != main.civ_sincretismo: continue
+		
+			maravillas_candidatas.append(edif_nombre)
+		
+		for coord_optima in celdas_optimas_rendimiento.keys():
+			for vec in HexMath.VECINOS_HEX:
+				var n = coord_optima + vec
+			
+				if celdas_optimas_rendimiento.has(n): continue 
+			
+				var dist = HexMath.dist_hex(n, asent_centro)
+				if dist < 1 or dist > 3: continue
+				if not main.city_grid.has(n): continue
+			
+				var datos_n = main.city_grid[n]
+				if datos_n.get("ajeno", false): continue
+				if datos_n.edificios.size() > 0 or datos_n.mejora_tipo != "": continue
+				if datos_n.get("caracteristica", "") == "NATURAL_WONDER" or datos_n.terreno == "NATURAL_WONDER": continue
+			
+				for mar_nombre in maravillas_candidatas:
+					if ReglasJuego.es_ubicacion_valida_para_edificio(n, mar_nombre, asent_centro, era, civ, main.city_grid, asent_tipo, main.asentamientos):
+						if not sugerencias.has(n): sugerencias[n] = []
+						var existe = false
+						for s in sugerencias[n]:
+							if s.edificio == mar_nombre: existe = true
+						if not existe:
+							sugerencias[n].append({"edificio": mar_nombre})
+						
+		return sugerencias
+
+	static func aplicar_edificio(main: Node2D, edificio: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+	
+		if datos.get("mejora_tipo", "") != "":
+			datos.mejora_tipo = ""
+	
+		if not datos.edificios.has(edificio):
+			datos.edificios.append(edificio)
+		
+		verificar_expansion_territorio(main, main.celda_seleccionada)
+	
+		main.actualizar_sugerencias_cache()
+		main.actualizar_panel_construccion()
+		main.actualizar_icono_celda(main.celda_seleccionada)
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func aplicar_mejora(main: Node2D, tipo: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+	
+		datos.mejora_tipo = tipo
+		verificar_expansion_territorio(main, main.celda_seleccionada)
+	
+		main.actualizar_sugerencias_cache()
+		main.actualizar_panel_construccion()
+		main.actualizar_icono_celda(main.celda_seleccionada)
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func borrar_edificio_especifico(main: Node2D, edificio_nombre: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		if datos.edificios.has(edificio_nombre):
+			datos.edificios.erase(edificio_nombre)
+			main.actualizar_sugerencias_cache()
+			main.actualizar_panel_construccion()
+			main.actualizar_icono_celda(main.celda_seleccionada)
+			main.actualizar_panel_ui()
+			main.guardar_partida_actual()
+			main.queue_redraw()
+
+	static func borrar_mejora(main: Node2D):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		datos.mejora_tipo = ""
+		main.actualizar_sugerencias_cache()
+		main.actualizar_panel_construccion()
+		main.actualizar_icono_celda(main.celda_seleccionada)
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func aplicar_edificio_externo(main: Node2D, edificio: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		datos.ajeno = true
+	
+		if datos.get("mejora_tipo", "") != "":
+			datos.mejora_tipo = ""
+		
+		if not datos.edificios.has(edificio): datos.edificios.append(edificio)
+	
+		verificar_expansion_territorio(main, main.celda_seleccionada)
+	
+		main.actualizar_panel_externos()
+		main.actualizar_visibilidad_boton_externos()
+		main.actualizar_icono_celda(main.celda_seleccionada)
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func aplicar_mejora_externo(main: Node2D, mejora: String):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		datos.ajeno = true
+		datos.mejora_tipo = mejora
+	
+		verificar_expansion_territorio(main, main.celda_seleccionada)
+	
+		main.actualizar_panel_externos()
+		main.actualizar_visibilidad_boton_externos()
+		main.actualizar_icono_celda(main.celda_seleccionada)
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+	static func borrar_externo(main: Node2D):
+		if not main.city_grid.has(main.celda_seleccionada): return
+		var datos = main.city_grid[main.celda_seleccionada]
+		datos.ajeno = false
+		datos.edificios.clear()
+		datos.mejora_tipo = ""
+		main.actualizar_panel_externos()
+		main.actualizar_visibilidad_boton_externos()
+		main.actualizar_icono_celda(main.celda_seleccionada)
+		main.actualizar_panel_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+
+class GestorAsentamientos:
+
+	static func iniciar_nueva_partida(main: Node2D, era: String, civ: String):
+		main.era_actual = era
+		main.civ_actual = civ
+		main.civ_sincretismo = "None"
+		main.partida_actual_nombre = "Autosave"
+		main.era_transicionada = (era != "Antiquity")
+	
+		for child in main.get_children():
+			if child is Control and child != main.camera and child != main.lbl_info and child != main.lbl_nombre_partida:
+				if not child is CanvasLayer: child.queue_free()
+	
+		main.asentamientos.clear()
+		crear_asentamiento_inicial(main, civ, "Capital", Vector2i(0, 0), true)
+	
+		main.cambiar_seccion("ASENTAMIENTOS")
+		main.actualizar_visibilidad_boton_externos()
+		main.actualizar_panel_gestion_ui()
+		main.actualizar_botones_recursos_ui()
+		main.guardar_partida_actual()
+
+	static func crear_asentamiento_inicial(main: Node2D, nombre: String, tipo: String, centro: Vector2i, es_capital: bool):
+		var grid = {}
+		var radio_inicial = 4
+		for q in range(-radio_inicial, radio_inicial + 1):
+			var r1 = max(-radio_inicial, -q - radio_inicial)
+			var r2 = min(radio_inicial, -q + radio_inicial)
+			for r in range(r1, r2 + 1):
+				var coord = centro + Vector2i(q, r)
+				var s = -coord.x - coord.y
+				var centro_px = HexMath.cubo_a_pixel(main.radio_hex, coord.x, coord.y, s)
+				var dist = HexMath.dist_hex(coord, centro)
+			
+				var hbox_icono = GridContainer.new()
+				hbox_icono.columns = 2
+				hbox_icono.add_theme_constant_override("h_separation", 2)
+				hbox_icono.add_theme_constant_override("v_separation", 2)
+				hbox_icono.custom_minimum_size = Vector2(40, 40)
+				hbox_icono.position = centro_px - Vector2(20, 20)
+				hbox_icono.visible = false
+				main.add_child(hbox_icono)
+			
+				var hbox_recurso = HBoxContainer.new()
+				hbox_recurso.custom_minimum_size = Vector2(24, 24)
+				hbox_recurso.alignment = BoxContainer.ALIGNMENT_CENTER
+				hbox_recurso.position = centro_px - Vector2(12, main.radio_hex * 0.75)
+				hbox_recurso.visible = false
+				main.add_child(hbox_recurso)
+			
+				var hbox_terreno = HBoxContainer.new()
+				hbox_terreno.custom_minimum_size = Vector2(40, 40)
+				hbox_terreno.alignment = BoxContainer.ALIGNMENT_CENTER
+				hbox_terreno.position = centro_px - Vector2(20, -main.radio_hex * 0.15)
+				hbox_terreno.visible = false
+				main.add_child(hbox_terreno)
+			
+				var edificios_iniciales: Array[String] = []
+				if es_capital and coord == centro:
+					edificios_iniciales.append("Palace")
+				elif not es_capital and coord == centro:
+					edificios_iniciales.append("Town Hall")
+			
+				var es_centro_o_anillo_1 = (dist <= 1)
+			
+				grid[coord] = {
+					"q": coord.x, "r": coord.y, "s": s,
+					"bioma": "DESERT",
+					"terreno": "FLAT",
+					"caracteristica": "NONE",
+					"rio": false,
+					"edificios": edificios_iniciales,
+					"edificios_dorados": [],
+					"mejora_tipo": "",
+					"recurso": "",
+					"favorita": 0,
+					"reclamada": es_centro_o_anillo_1,
+					"ajeno": false,
+					"nodo_icono": hbox_icono,
+					"nodo_recurso": hbox_recurso,
+					"nodo_terreno": hbox_terreno
+				}
+			
+		main.asentamientos.append({
+			"nombre": nombre,
+			"tipo": tipo,
+			"centro": centro,
+			"grid": grid
+		})
+	
+		cambiar_asentamiento_activo(main, main.asentamientos.size() - 1)
+		main.guardar_partida_actual()
+
+	static func cambiar_asentamiento_activo(main: Node2D, idx: int):
+		if main.asentamientos.size() > 0 and main.asentamiento_activo_idx < main.asentamientos.size():
+			for c in main.asentamientos[main.asentamiento_activo_idx].grid.values():
+				if is_instance_valid(c.nodo_icono): c.nodo_icono.visible = false
+				if is_instance_valid(c.nodo_recurso): c.nodo_recurso.visible = false
+				if is_instance_valid(c.nodo_terreno): c.nodo_terreno.visible = false
+			
+		main.asentamiento_activo_idx = idx
+		main.city_grid = main.asentamientos[idx].grid
+		main.celda_seleccionada = main.asentamientos[idx].centro
+	
+		for coord in main.city_grid.keys():
+			var datos = main.city_grid[coord]
+			if is_instance_valid(datos.nodo_icono): datos.nodo_icono.visible = true
+			if is_instance_valid(datos.nodo_recurso): datos.nodo_recurso.visible = true
+			if is_instance_valid(datos.nodo_terreno): datos.nodo_terreno.visible = true
+		
+		main.actualizar_sugerencias_cache()
+		main.actualizar_iconos_todos()
+		main.actualizar_botones_recursos_ui()
+		main.actualizar_panel_pincel()
+		main.actualizar_panel_construccion()
+		main.actualizar_panel_externos()
+		main.actualizar_visibilidad_boton_externos()
+		main.actualizar_panel_ui()
+		main.actualizar_lista_asentamientos_ui()
+		main.centrar_camara_en_activo()
+		main.queue_redraw()
+
+	static func crear_nuevo_asentamiento(main: Node2D, tipo: String):
+		var nombre = "Town " + str(main.asentamientos.size()) if tipo == "Town" else "City " + str(main.asentamientos.size())
+		crear_asentamiento_inicial(main, nombre, tipo, Vector2i(0, 0), false)
+
+	static func resetear_asentamiento(main: Node2D, idx: int):
+		var asent = main.asentamientos[idx]
+		var es_capital = (asent.tipo == "Capital")
+	
+		for coord in asent.grid.keys():
+			var datos = asent.grid[coord]
+			datos.recurso = ""
+			datos.rio = false
+			datos.mejora_tipo = ""
+			datos.favorita = 0
+			datos.ajeno = false
+			var dist = HexMath.dist_hex(coord, asent.centro)
+			datos.reclamada = (dist <= 1)
+			datos.edificios.clear()
+			datos.edificios_dorados.clear()
+		
+			if coord == asent.centro:
+				if es_capital: datos.edificios.append("Palace")
+				else: datos.edificios.append("Town Hall")
+				
+		if idx == main.asentamiento_activo_idx:
+			main.actualizar_sugerencias_cache()
+			main.actualizar_botones_recursos_ui()
+			main.actualizar_panel_pincel()
+			main.actualizar_panel_construccion()
+			main.actualizar_panel_externos()
+			main.actualizar_visibilidad_boton_externos()
+			main.actualizar_panel_ui()
+			main.actualizar_iconos_todos()
+			main.queue_redraw()
+		main.guardar_partida_actual()
+
+	static func ejecutar_borrado_asentamiento(main: Node2D, idx: int):
+		if idx >= 0 and idx < main.asentamientos.size():
+			main.asentamientos.remove_at(idx)
+			if main.asentamiento_activo_idx >= main.asentamientos.size():
+				main.asentamiento_activo_idx = max(0, main.asentamientos.size() - 1)
+			cambiar_asentamiento_activo(main, main.asentamiento_activo_idx)
+			main.guardar_partida_actual()
+
+	static func cambiar_era(main: Node2D, nueva_era: String, nueva_civ: String, idx_nueva_capital: int, dorados_seleccionados: Array = []):
+		main.era_actual = nueva_era
+		main.civ_actual = nueva_civ
+		main.civ_sincretismo = "None"
+		main.era_transicionada = true
+	
+		for i in range(main.asentamientos.size()):
+			var asent = main.asentamientos[i]
+			for coord in asent.grid.keys():
+				var c = asent.grid[coord]
+				c.recurso = ""
+				c.edificios_dorados.clear()
+				for edif_oro in dorados_seleccionados:
+					if c.edificios.has(edif_oro): c.edificios_dorados.append(edif_oro)
+		
+			var c_datos = asent.grid[asent.centro]
+			if i == idx_nueva_capital:
+				asent.tipo = "Capital"
+				if c_datos.edificios.has("Town Hall"): c_datos.edificios.erase("Town Hall")
+				if not c_datos.edificios.has("Palace"): c_datos.edificios.append("Palace")
+			else:
+				asent.tipo = "Town"
+				if c_datos.edificios.has("Palace"): c_datos.edificios.erase("Palace")
+				if not c_datos.edificios.has("Town Hall"): c_datos.edificios.append("Town Hall")
+			
+		main.actualizar_botones_recursos_ui()
+		main.actualizar_sugerencias_cache()
+		main.actualizar_panel_pincel()
+		main.actualizar_panel_construccion()
+		main.actualizar_panel_externos()
+		main.actualizar_visibilidad_boton_externos()
+		main.actualizar_panel_ui()
+		main.actualizar_lista_asentamientos_ui()
+		main.actualizar_iconos_todos()
+		main.actualizar_panel_gestion_ui()
+		main.guardar_partida_actual()
+		main.queue_redraw()
+
+
+class GestorArchivos:
+
+	static func parsear_vector2i(valor) -> Vector2i:
+		if typeof(valor) == TYPE_VECTOR2I:
+			return valor
+		if typeof(valor) == TYPE_ARRAY and valor.size() >= 2:
+			return Vector2i(int(valor[0]), int(valor[1]))
+		
+		var limpia = str(valor).replace("Vector2i", "").replace("(", "").replace(")", "").replace(" ", "")
+		var partes = limpia.split(",")
+		if partes.size() >= 2:
+			return Vector2i(partes[0].to_int(), partes[1].to_int())
+		return Vector2i.ZERO
+
+	static func cargar_local() -> Dictionary:
+		var dict = {}
+		if FileAccess.file_exists("user://saves_civ7.json"):
+			var archivo = FileAccess.open("user://saves_civ7.json", FileAccess.READ)
+			if archivo:
+				var texto = archivo.get_as_text()
+				var json = JSON.new()
+				if json.parse(texto) == OK:
+					if typeof(json.data) == TYPE_DICTIONARY:
+						dict = json.data
+		return dict
+
+	static func guardar_partida_actual(main: Node2D):
+		var asentamientos_limpios = []
+		for asent in main.asentamientos:
+			var grid_limpio = {}
+			for coord_key in asent.grid.keys():
+				var c = asent.grid[coord_key]
+				var coord_str = "%d,%d" % [c.q, c.r]
+			
+				grid_limpio[coord_str] = {
+					"q": c.q, "r": c.r, "s": c.s,
+					"bioma": c.bioma,
+					"terreno": c.terreno,
+					"caracteristica": c.get("caracteristica", "NONE"),
+					"rio": c.rio,
+					"edificios": Array(c.edificios),
+					"edificios_dorados": Array(c.edificios_dorados),
+					"mejora_tipo": c.mejora_tipo,
+					"recurso": c.get("recurso", ""),
+					"favorita": c.get("favorita", 0),
+					"reclamada": c.get("reclamada", true), # ¡IMPORTANTE! Guardar reclamada
+					"ajeno": c.get("ajeno", false)
+				}
+			
+			asentamientos_limpios.append({
+				"nombre": asent.nombre,
+				"tipo": asent.tipo,
+				"centro": [asent.centro.x, asent.centro.y],
+				"grid": grid_limpio
+			})
+
+		var extra_data = {
+			"era_actual": main.era_actual,
+			"civ_actual": main.civ_actual,
+			"civ_sincretismo": main.civ_sincretismo,
+			"lider_actual": main.lider_actual, # ¡AQUÍ SE GUARDA EL LÍDER!
+			"era_transicionada": main.era_transicionada,
+			"asentamientos": asentamientos_limpios
+		}
+	
+		main.partidas_guardadas[main.partida_actual_nombre] = extra_data
+		var archivo = FileAccess.open("user://saves_civ7.json", FileAccess.WRITE)
+		if archivo: 
+			archivo.store_string(JSON.stringify(main.partidas_guardadas))
+	
+		if main.lbl_nombre_partida:
+			main.lbl_nombre_partida.text = "💾 Game: " + main.partida_actual_nombre
+
+	static func cargar_partida_especifica(main: Node2D, nombre: String) -> bool:
+		if not main.partidas_guardadas.has(nombre): return false
+		var datos_partida = main.partidas_guardadas[nombre]
+	
+		main.partida_actual_nombre = nombre
+		main.era_actual = datos_partida.get("era_actual", "Antiquity")
+		main.civ_actual = datos_partida.get("civ_actual", "None")
+		main.civ_sincretismo = datos_partida.get("civ_sincretismo", "None")
+		main.lider_actual = datos_partida.get("lider_actual", "Augustus") # ¡AQUÍ SE CARGA EL LÍDER!
+		main.era_transicionada = datos_partida.get("era_transicionada", main.era_actual != "Antiquity")
+		var datos_asentamientos = datos_partida.get("asentamientos", [])
+	
+		main.asentamientos.clear()
+		for child in main.get_children():
+			if child is Control and child != main.camera and child != main.lbl_info and child != main.lbl_nombre_partida:
+				if not child is CanvasLayer:
+					child.queue_free()
+			
+		for asent_data in datos_asentamientos:
+			var grid = {}
+			var centro = parsear_vector2i(asent_data.centro)
+			var grid_data = asent_data.grid
+			var tipo_asentamiento = asent_data.get("tipo", "Town")
+		
+			for key in grid_data.keys():
+				var coord = parsear_vector2i(key)
+				var c = grid_data[key]
+				var s = -coord.x - coord.y
+				var centro_px = HexMath.cubo_a_pixel(main.radio_hex, coord.x, coord.y, s)
+			
+				var hbox_icono = GridContainer.new()
+				hbox_icono.columns = 2
+				hbox_icono.add_theme_constant_override("h_separation", 2)
+				hbox_icono.add_theme_constant_override("v_separation", 2)
+				hbox_icono.custom_minimum_size = Vector2(40, 40)
+				hbox_icono.position = centro_px - Vector2(20, 20)
+				hbox_icono.visible = false
+				main.add_child(hbox_icono)
+			
+				var hbox_recurso = HBoxContainer.new()
+				hbox_recurso.custom_minimum_size = Vector2(24, 24)
+				hbox_recurso.alignment = BoxContainer.ALIGNMENT_CENTER
+				hbox_recurso.position = centro_px - Vector2(12, main.radio_hex * 0.75)
+				hbox_recurso.visible = false
+				main.add_child(hbox_recurso)
+			
+				var hbox_terreno = HBoxContainer.new()
+				hbox_terreno.custom_minimum_size = Vector2(40, 40)
+				hbox_terreno.alignment = BoxContainer.ALIGNMENT_CENTER
+				hbox_terreno.position = centro_px - Vector2(20, -main.radio_hex * 0.15)
+				hbox_terreno.visible = false
+				main.add_child(hbox_terreno)
+			
+				var edif_array: Array[String] = []
+				if c.has("edificios"):
+					for e in c.edificios: edif_array.append(str(e))
+			
+				if coord == centro:
+					var tiene_gobierno = edif_array.has("Palace") or edif_array.has("Town Hall")
+					if not tiene_gobierno:
+						if tipo_asentamiento == "Capital":
+							edif_array.append("Palace")
+						else:
+							edif_array.append("Town Hall")
+			
+				var edif_dorados_array: Array[String] = []
+				if c.has("edificios_dorados"):
+					for e in c.edificios_dorados: edif_dorados_array.append(str(e))
+			
+				var loaded_rec = c.get("recurso", "")
+				var rec_str = ""
+				if typeof(loaded_rec) == TYPE_BOOL: rec_str = "Resource" if loaded_rec else ""
+				else: rec_str = str(loaded_rec)
+			
+				var dist = HexMath.dist_hex(coord, centro)
+				var reclamada_val = c.get("reclamada", dist <= 1)
+			
+				grid[coord] = {
+					"q": coord.x, "r": coord.y, "s": s,
+					"bioma": c.get("bioma", "DESERT"),
+					"terreno": c.get("terreno", "FLAT"),
+					"caracteristica": c.get("caracteristica", "NONE"),
+					"rio": c.get("rio", false),
+					"edificios": edif_array,
+					"edificios_dorados": edif_dorados_array,
+					"mejora_tipo": c.get("mejora_tipo", ""),
+					"recurso": rec_str,
+					"favorita": int(c.get("favorita", 0)),
+					"reclamada": reclamada_val, # ¡IMPORTANTE! Cargar celda reclamada
+					"ajeno": bool(c.get("ajeno", false)),
+					"nodo_icono": hbox_icono,
+					"nodo_recurso": hbox_recurso,
+					"nodo_terreno": hbox_terreno
+				}
+			
+			main.asentamientos.append({
+				"nombre": asent_data.get("nombre", "Settlement"),
+				"tipo": tipo_asentamiento,
+				"centro": centro,
+				"grid": grid
+			})
+		
+		main.actualizar_panel_gestion_ui()
+		if main.asentamientos.size() > 0:
+			main.cambiar_asentamiento_activo(0)
+		
+		return true
+
+	# reemplazar: si se indica, ese diálogo (normalmente una lista anterior) se
+	# cierra y libera antes de abrir este, para no dejar dos modales a la vez.
+	static func mostrar_dialogo_cargar(main: Node2D, reemplazar: Window = null):
+		var dialog = AcceptDialog.new()
+		dialog.title = "Load or Delete Game"
+	
+		var scroll = ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(350, 240)
+		var vbox = VBoxContainer.new()
+		vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll.add_child(vbox)
+	
+		for nombre in main.partidas_guardadas.keys():
+			var hbox = HBoxContainer.new()
+			hbox.add_theme_constant_override("separation", 6)
+		
+			var btn = Button.new()
+			btn.text = "📁 " + nombre
+			btn.custom_minimum_size = Vector2(230, 40)
+			var btn_nom = nombre
+			btn.pressed.connect(func(): 
+				cargar_partida_especifica(main, btn_nom)
+				dialog.queue_free()
+			)
+			hbox.add_child(btn)
+		
+			var btn_del = Button.new()
+			btn_del.text = "🗑️"
+			btn_del.custom_minimum_size = Vector2(40, 40)
+			btn_del.pressed.connect(func():
+				mostrar_dialogo_confirmar_borrado(main, btn_nom, dialog)
+			)
+			hbox.add_child(btn_del)
+			vbox.add_child(hbox)
+		
+		dialog.add_child(scroll)
+		dialog.close_requested.connect(func(): dialog.queue_free())
+		GestorInterfaz.abrir_modal(main, dialog, reemplazar, true, Vector2(380, 320))
+
+	static func mostrar_dialogo_confirmar_borrado(main: Node2D, nombre_partida: String, parent_dialog: Window):
+		var confirm = ConfirmationDialog.new()
+		confirm.title = "Confirm Deletion"
+		confirm.dialog_text = "Are you sure you want to delete the save '" + nombre_partida + "'?"
+	
+		confirm.confirmed.connect(func():
+			main.partidas_guardadas.erase(nombre_partida)
+			var archivo = FileAccess.open("user://saves_civ7.json", FileAccess.WRITE)
+			if archivo: archivo.store_string(JSON.stringify(main.partidas_guardadas))
+			# La lista se reconstruye con el guardado ya borrado: el diálogo anterior
+			# se libera dentro de mostrar_dialogo_cargar() mediante "reemplazar".
+			confirm.hide()
+			confirm.queue_free()
+			mostrar_dialogo_cargar(main, parent_dialog)
+		)
+	
+		confirm.close_requested.connect(func(): confirm.queue_free())
+		# Se anida DENTRO del diálogo de la lista (no cuelga de la raíz): así cada
+		# ventana tiene su propio hueco exclusivo y no chocan entre ellas.
+		GestorInterfaz.abrir_modal(main, confirm, parent_dialog, false, Vector2(340, 150))
+
+
+class GestorDialogos:
+
+	static func mostrar_dialogo_renombrar(main: Node2D, idx: int):
+		var dialog = AcceptDialog.new()
+		dialog.title = "Rename Settlement"
+		var vbox = VBoxContainer.new()
+		var line_edit = LineEdit.new()
+		line_edit.text = main.asentamientos[idx].nombre
+		line_edit.custom_minimum_size = Vector2(250, 40)
+		vbox.add_child(line_edit)
+		dialog.add_child(vbox)
+	
+		dialog.confirmed.connect(func():
+			if line_edit.text.strip_edges() != "":
+				main.asentamientos[idx].nombre = line_edit.text.strip_edges()
+				main.actualizar_lista_asentamientos_ui()
+				main.guardar_partida_actual()
+			main.centrar_camara_en_activo()
+			dialog.queue_free()
+		)
+		dialog.close_requested.connect(func():
+			main.centrar_camara_en_activo()
+			dialog.queue_free()
+		)
+		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(300, 150))
+
+	static func mostrar_dialogo_borrar_asentamiento(main: Node2D, idx: int):
+		var dialog = ConfirmationDialog.new()
+		dialog.title = "Delete Settlement"
+		dialog.dialog_text = "¿Are you sure you want to delete '" + main.asentamientos[idx].nombre + "' and all its terrain?"
+		dialog.confirmed.connect(func():
+			GestorAsentamientos.ejecutar_borrado_asentamiento(main, idx)
+			dialog.queue_free()
+		)
+		dialog.canceled.connect(func(): dialog.queue_free())
+		dialog.close_requested.connect(func(): dialog.queue_free())
+		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(320, 150))
+
+	static func mostrar_dialogo_lideres_inicio(main: Node2D, iniciar_nueva_partida_despues: bool = true):
+		var dialog = AcceptDialog.new()
+		dialog.title = "Select Leader"
+		var vbox = VBoxContainer.new()
+		vbox.add_theme_constant_override("separation", 12)
+		var lbl = Label.new()
+		lbl.text = "Choose your leader:"
+		lbl.add_theme_font_size_override("font_size", 14)
+		vbox.add_child(lbl)
+	
+		var scroll = ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(580, 260)
+		var grid = GridContainer.new()
+		grid.columns = 4
+		grid.add_theme_constant_override("h_separation", 8)
+		grid.add_theme_constant_override("v_separation", 8)
+		scroll.add_child(grid)
+	
+		var btn_group_lideres = ButtonGroup.new()
+		var lista_lideres = Constantes.DATOS_LIDERES.keys() if Constantes.DATOS_LIDERES else []
+		
+		for lider in lista_lideres:
+			var btn = Button.new()
+			btn.custom_minimum_size = Vector2(130, 80)
+			btn.toggle_mode = true
+			btn.button_group = btn_group_lideres
+			btn.button_pressed = (lider == main.lider_actual)
+			btn.set_meta("lider_name", lider)
+		
+			var sb = StyleBoxFlat.new()
+			sb.bg_color = Color(0.12, 0.12, 0.16)
+			sb.border_color = Color(0.3, 0.3, 0.3)
+			sb.set_border_width_all(2)
+			sb.set_corner_radius_all(6)
+		
+			var sb_press = sb.duplicate()
+			sb_press.bg_color = Color(0.2, 0.3, 0.5)
+			sb_press.border_color = Color(0.4, 0.8, 1.0)
+			sb_press.set_border_width_all(3)
+		
+			btn.add_theme_stylebox_override("normal", sb)
+			btn.add_theme_stylebox_override("pressed", sb_press)
+			btn.add_theme_stylebox_override("hover", sb_press)
+		
+			var vb_btn = VBoxContainer.new()
+			vb_btn.set_anchors_preset(Control.PRESET_FULL_RECT)
+			vb_btn.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			vb_btn.alignment = BoxContainer.ALIGNMENT_CENTER
+			vb_btn.add_theme_constant_override("separation", 4)
+		
+			var path = main.resolver_ruta_asset(lider)
+			if ResourceLoader.exists(path):
+				var tex = TextureRect.new()
+				tex.texture = load(path)
+				tex.custom_minimum_size = Vector2(40, 40)
+				tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				vb_btn.add_child(tex)
+		
+			var lbl_name = Label.new()
+			lbl_name.text = lider
+			lbl_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			lbl_name.add_theme_font_size_override("font_size", 11)
+			lbl_name.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lbl_name.custom_minimum_size = Vector2(120, 0)
+			vb_btn.add_child(lbl_name)
+		
+			btn.add_child(vb_btn)
+			grid.add_child(btn)
+		
+		vbox.add_child(scroll)
+		dialog.add_child(vbox)
+	
+		dialog.confirmed.connect(func():
+			var btn_presionado = btn_group_lideres.get_pressed_button()
+			if btn_presionado:
+				main.lider_actual = btn_presionado.get_meta("lider_name")
+				main.actualizar_panel_ui()
+			
+			if iniciar_nueva_partida_despues:
+				# El diálogo de nueva partida REEMPLAZA a este: abrir_modal libera el modal
+				# anterior antes de mostrar el siguiente (si no, Godot rechaza el 2º modal).
+				mostrar_dialogo_nueva_partida(main, dialog)
+			else:
+				dialog.hide()
+				dialog.queue_free()
+		)
+		dialog.close_requested.connect(func(): dialog.queue_free())
+		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(620, 380))
+
+	# reemplazar: diálogo anterior que este debe sustituir (cadena Líder -> Nueva
+	# partida). Se libera antes de abrir este para no dejar dos modales abiertos.
+	static func mostrar_dialogo_nueva_partida(main: Node2D, reemplazar: Window = null):
+		var dialog = AcceptDialog.new()
+		dialog.title = "Start New Game"
+		var vbox = VBoxContainer.new()
+		vbox.add_theme_constant_override("separation", 10)
+	
+		var lbl_e = Label.new()
+		lbl_e.text = "Select Starting Era:"
+		vbox.add_child(lbl_e)
+	
+		var era_group = ButtonGroup.new()
+		var era_hbox = HBoxContainer.new()
+		era_hbox.add_theme_constant_override("separation", 8)
+		vbox.add_child(era_hbox)
+	
+		var eras = ["Antiquity", "Exploration", "Modern Age"]
+		var era_buttons = {}
+		for i in range(eras.size()):
+			var era_name = eras[i]
+			var btn_era = Button.new()
+			btn_era.toggle_mode = true
+			btn_era.button_group = era_group
+			btn_era.custom_minimum_size = Vector2(110, 36)
+			btn_era.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			if i == 0: btn_era.button_pressed = true
+		
+			var sb_era = StyleBoxFlat.new()
+			sb_era.bg_color = Color(0.15, 0.15, 0.2)
+			sb_era.set_corner_radius_all(6)
+			var sb_era_press = sb_era.duplicate()
+			sb_era_press.bg_color = Color(0.25, 0.45, 0.75)
+			btn_era.add_theme_stylebox_override("normal", sb_era)
+			btn_era.add_theme_stylebox_override("pressed", sb_era_press)
+			btn_era.add_theme_stylebox_override("hover", sb_era_press)
+		
+			var hb = HBoxContainer.new()
+			hb.set_anchors_preset(Control.PRESET_FULL_RECT)
+			hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			hb.alignment = BoxContainer.ALIGNMENT_CENTER
+			hb.add_theme_constant_override("separation", 6)
+		
+			var tex = TextureRect.new()
+			tex.custom_minimum_size = Vector2(24, 24)
+			tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			var path = main.resolver_ruta_asset(era_name)
+			if ResourceLoader.exists(path): tex.texture = load(path)
+			hb.add_child(tex)
+		
+			var lbl = Label.new()
+			lbl.text = era_name
+			hb.add_child(lbl)
+			btn_era.add_child(hb)
+		
+			era_hbox.add_child(btn_era)
+			era_buttons[era_name] = btn_era
+	
+		var lbl_c = Label.new()
+		lbl_c.text = "Select Starting Civilization:"
+		vbox.add_child(lbl_c)
+	
+		var btn_group_civ = ButtonGroup.new()
+		var grid_civs = main._crear_selector_civs(Constantes.TODAS_LAS_CIVS[0], btn_group_civ)
+		vbox.add_child(grid_civs)
+		dialog.add_child(vbox)
+	
+		dialog.confirmed.connect(func():
+			var era_seleccionada = "Antiquity"
+			for era_name in era_buttons.keys():
+				if era_buttons[era_name].button_pressed:
+					era_seleccionada = era_name
+					break
+				
+			var civ_seleccionada = Constantes.TODAS_LAS_CIVS[0]
+			if btn_group_civ.get_pressed_button():
+				civ_seleccionada = btn_group_civ.get_pressed_button().get_meta("civ_name")
+			
+			GestorAsentamientos.iniciar_nueva_partida(main, era_seleccionada, civ_seleccionada)
+			dialog.queue_free()
+		)
+		GestorInterfaz.abrir_modal(main, dialog, reemplazar, true, Vector2(620, 460))
+
+	static func mostrar_dialogo_sincretismo(main: Node2D):
+		var dialog = AcceptDialog.new()
+		dialog.title = "Select Syncretism"
+		var vbox = VBoxContainer.new()
+		var btn_group_civs = ButtonGroup.new()
+		var grid_civs = main._crear_selector_civs(main.civ_sincretismo, btn_group_civs, true)
+		vbox.add_child(grid_civs)
+		dialog.add_child(vbox)
+	
+		dialog.confirmed.connect(func():
+			var civ_seleccionada = "None"
+			if btn_group_civs.get_pressed_button():
+				civ_seleccionada = btn_group_civs.get_pressed_button().get_meta("civ_name")
+			
+			if civ_seleccionada != main.civ_actual:
+				main.civ_sincretismo = civ_seleccionada
+				main.actualizar_panel_gestion_ui()
+				main.actualizar_sugerencias_cache()
+				main.actualizar_panel_construccion()
+				main.guardar_partida_actual()
+			dialog.queue_free()
+		)
+		dialog.close_requested.connect(func(): dialog.queue_free())
+		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(700, 480))
+
+	static func mostrar_dialogo_confirmar_siguiente_era(main: Node2D):
+		var siguiente = ""
+		if main.era_actual == "Antiquity": siguiente = "Exploration"
+		elif main.era_actual == "Exploration": siguiente = "Modern Age"
+		if siguiente == "": return
+	
+		var dialog = ConfirmationDialog.new()
+		dialog.title = "New Era: " + siguiente + "!"
+		var vbox = VBoxContainer.new()
+		vbox.add_theme_constant_override("separation", 10)
+	
+		var lbl_adv = Label.new()
+		lbl_adv.text = "All resources will be cleared from the map."
+		vbox.add_child(lbl_adv)
+	
+		var elegibles = []
+		for i in range(main.asentamientos.size()):
+			if main.asentamientos[i].tipo in ["Capital", "City"]:
+				elegibles.append(i)
+	
+		var btn_group_cap = ButtonGroup.new()
+		var btn_dict_cap = {}
+	
+		if elegibles.size() > 1:
+			vbox.add_child(HSeparator.new())
+			var lbl_cap = Label.new()
+			lbl_cap.text = "Select your new Global Capital:"
+			vbox.add_child(lbl_cap)
+		
+			var pre_selected = elegibles[0]
+			if main.asentamiento_activo_idx in elegibles: pre_selected = main.asentamiento_activo_idx
+		
+			for idx in elegibles:
+				var rb = CheckBox.new()
+				rb.text = main.asentamientos[idx].nombre + (" (Previous Capital)" if main.asentamientos[idx].tipo == "Capital" else " (City)")
+				rb.button_group = btn_group_cap
+				if idx == pre_selected: rb.button_pressed = true
+				vbox.add_child(rb)
+				btn_dict_cap[rb] = idx
+			
+		vbox.add_child(HSeparator.new())
+		var lbl_civ = Label.new()
+		lbl_civ.text = "Select your Civilization:"
+		vbox.add_child(lbl_civ)
+	
+		var btn_group_civs = ButtonGroup.new()
+		var grid_civs = main._crear_selector_civs(main.civ_actual, btn_group_civs, false, siguiente, main.civ_actual)
+		vbox.add_child(grid_civs)
+	
+		var dorados_disponibles = {}
+		for asen in main.asentamientos:
+			for coord in asen.grid.keys():
+				var d_celda = asen.grid[coord]
+				if d_celda.edificios.has("Academy"): dorados_disponibles["Academy"] = true
+				if d_celda.edificios.has("Amphitheater"): dorados_disponibles["Amphitheater"] = true
+			
+		var checkboxes_oro = {}
+		if dorados_disponibles.size() > 0:
+			vbox.add_child(HSeparator.new())
+			var lbl_oro = Label.new()
+			lbl_oro.text = "🌟 Select for Golden Age:"
+			lbl_oro.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3))
+			vbox.add_child(lbl_oro)
+		
+			for edif_oro in dorados_disponibles.keys():
+				var cb = CheckBox.new()
+				cb.text = edif_oro
+				vbox.add_child(cb)
+				checkboxes_oro[edif_oro] = cb
+
+		dialog.add_child(vbox)
+	
+		dialog.confirmed.connect(func():
+			var idx_cap = elegibles[0] if elegibles.size() > 0 else 0
+			if elegibles.size() > 1:
+				for rb in btn_dict_cap.keys():
+					if rb.button_pressed:
+						idx_cap = btn_dict_cap[rb]
+						break
+		
+			var seleccionados_oro = []
+			for edif_oro in checkboxes_oro.keys():
+				if checkboxes_oro[edif_oro].button_pressed:
+					seleccionados_oro.append(edif_oro)
+		
+			var civ_seleccionada = main.civ_actual
+			if btn_group_civs.get_pressed_button():
+				civ_seleccionada = btn_group_civs.get_pressed_button().get_meta("civ_name")
+			
+			GestorAsentamientos.cambiar_era(main, siguiente, civ_seleccionada, idx_cap, seleccionados_oro)
+			dialog.queue_free()
+		)
+		dialog.canceled.connect(func(): dialog.queue_free())
+		dialog.close_requested.connect(func(): dialog.queue_free())
+		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(700, 600))
+
+
+class GestorInterfaz:
+
+	# --------------------------------------------------------------------------
+	# APERTURA SEGURA DE VENTANAS MODALES
+	# --------------------------------------------------------------------------
+	# Godot admite un único "exclusive child" (ventana modal activa) por ventana
+	# padre. Al abrir un segundo modal colgado de la misma ventana raíz el motor
+	# reporta: "Attempting to make child window exclusive, but the parent window
+	# already has another exclusive child".
+	# Reglas que aplica este helper (evita el error en todos los flujos):
+	#   * Modal abierto DESDE otro modal -> se anida dentro de él, de modo que cada
+	#     ventana gestiona su propio hueco exclusivo.
+	#   * Modal que REEMPLAZA a otro     -> se oculta y libera el anterior antes de
+	#     abrir el nuevo (reemplaza_padre = true), liberando su exclusividad.
+	#   * Modal suelto                   -> se cuelga de la ventana raíz.
+	static func abrir_modal(main: Node2D, ventana: Window, padre: Window = null, reemplaza_padre: bool = false, tamano: Vector2 = Vector2.ZERO) -> void:
+		var raiz: Window = main.get_tree().root
+		var contenedor: Node = raiz
+		if is_instance_valid(padre):
+			if reemplaza_padre:
+				# Ocultar + liberar suelta el "exclusive child" del padre.
+				padre.exclusive = false
+				padre.hide()
+				padre.queue_free()
+			elif padre.visible:
+				contenedor = padre
+		if contenedor == raiz:
+			# La aplicación muestra un único modal a la vez. Si quedara otro abierto
+			# (cadena de diálogos mal cerrada, cierre por código, etc.) se libera antes
+			# de abrir este, para que Godot acepte el nuevo "exclusive child".
+			for hijo in raiz.get_children():
+				if hijo is Window and hijo != ventana and hijo.visible and hijo.exclusive:
+					hijo.exclusive = false
+					hijo.hide()
+					hijo.queue_free()
+		contenedor.add_child(ventana)
+		if tamano == Vector2.ZERO:
+			ventana.popup_centered()
+		else:
+			ventana.popup_centered(tamano)
+
+	static func aplicar_estilo_moderno_panel(panel: Control):
+		if panel is PanelContainer:
+			var sb = StyleBoxFlat.new()
+			sb.bg_color = Color("#181820")
+			sb.border_color = Color("#2a2a38")
+			sb.set_border_width_all(2)
+			sb.set_corner_radius_all(10)
+			sb.shadow_color = Color(0, 0, 0, 0.4)
+			sb.shadow_size = 8
+			panel.add_theme_stylebox_override("panel", sb)
+
+	static func crear_boton_menu(icono: String, tooltip: String) -> Button:
+		var b = Button.new()
+		b.text = icono
+		b.custom_minimum_size = Vector2(48, 48)
+		b.tooltip_text = tooltip
+		b.add_theme_font_size_override("font_size", 20)
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Color("#20202c")
+		sb.set_corner_radius_all(8)
+		sb.border_color = Color("#323246")
+		sb.set_border_width_all(1)
+		b.add_theme_stylebox_override("normal", sb)
+		return b
+
+	static func construir_interfaz_principal(main: Node2D) -> Dictionary:
+		var canvas = CanvasLayer.new()
+		main.add_child(canvas)
+	
+		var vbox_maestro_izq = VBoxContainer.new()
+		vbox_maestro_izq.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		vbox_maestro_izq.offset_left = 16
+		vbox_maestro_izq.offset_top = 16
+		vbox_maestro_izq.offset_right = 500
+		vbox_maestro_izq.offset_bottom = 880
+		vbox_maestro_izq.add_theme_constant_override("separation", 8)
+		canvas.add_child(vbox_maestro_izq)
+	
+		var hbox_layout_principal = HBoxContainer.new()
+		hbox_layout_principal.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		hbox_layout_principal.add_theme_constant_override("separation", 10)
+		vbox_maestro_izq.add_child(hbox_layout_principal)
+	
+		var vbox_navegacion = VBoxContainer.new()
+		vbox_navegacion.custom_minimum_size = Vector2(50, 0)
+		vbox_navegacion.add_theme_constant_override("separation", 10)
+		hbox_layout_principal.add_child(vbox_navegacion)
+	
+		var btn_menu_asentamientos = crear_boton_menu("🏛️", "Game & Settlements")
+		var btn_menu_pincel = crear_boton_menu("🖌️", "Terrain Brush")
+		var btn_modo_construccion = crear_boton_menu("🔨", "Build")
+		var btn_modo_externos = crear_boton_menu("🌐", "External")
+		var btn_menu_felicidad = crear_boton_menu("😊", "Happiness Viewer")
+	
+		vbox_navegacion.add_child(btn_menu_asentamientos)
+		vbox_navegacion.add_child(btn_menu_pincel)
+		vbox_navegacion.add_child(btn_modo_construccion)
+		vbox_navegacion.add_child(btn_modo_externos)
+		vbox_navegacion.add_child(btn_menu_felicidad)
+	
+		var panel_desplegable = PanelContainer.new()
+		panel_desplegable.custom_minimum_size = Vector2(460, 750)
+		panel_desplegable.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		aplicar_estilo_moderno_panel(panel_desplegable)
+		hbox_layout_principal.add_child(panel_desplegable)
+	
+		var margin_desplegable = MarginContainer.new()
+		margin_desplegable.add_theme_constant_override("margin_left", 12)
+		margin_desplegable.add_theme_constant_override("margin_top", 12)
+		margin_desplegable.add_theme_constant_override("margin_right", 12)
+		margin_desplegable.add_theme_constant_override("margin_bottom", 12)
+		panel_desplegable.add_child(margin_desplegable)
+	
+		var contenedor_contenido_desplegable = VBoxContainer.new()
+		contenedor_contenido_desplegable.add_theme_constant_override("separation", 0)
+		margin_desplegable.add_child(contenedor_contenido_desplegable)
+
+		var panel_info = PanelContainer.new()
+		panel_info.custom_minimum_size = Vector2(0, 110)
+		contenedor_contenido_desplegable.add_child(panel_info)
+	
+		var margin_info = MarginContainer.new()
+		margin_info.add_theme_constant_override("margin_left", 8)
+		margin_info.add_theme_constant_override("margin_top", 8)
+		margin_info.add_theme_constant_override("margin_right", 8)
+		margin_info.add_theme_constant_override("margin_bottom", 8)
+		panel_info.add_child(margin_info)
+	
+		var lbl_info = RichTextLabel.new()
+		lbl_info.text = "Select a hexagon."
+		lbl_info.bbcode_enabled = true
+		lbl_info.fit_content = true
+		lbl_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl_info.add_theme_font_size_override("normal_font_size", 14)
+		margin_info.add_child(lbl_info)
+	
+		var spacer_info = Control.new()
+		spacer_info.custom_minimum_size = Vector2(0, 12)
+		contenedor_contenido_desplegable.add_child(spacer_info)
+	
+		# 1. SECCIÓN: PINCEL
+		var panel_biomas = VBoxContainer.new()
+		panel_biomas.visible = false
+		panel_biomas.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		panel_biomas.add_theme_constant_override("separation", 8)
+		contenedor_contenido_desplegable.add_child(panel_biomas)
+
+		var scroll_biomas = ScrollContainer.new()
+		scroll_biomas.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		panel_biomas.add_child(scroll_biomas)
+	
+		var vbox_biomas = VBoxContainer.new()
+		vbox_biomas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vbox_biomas.add_theme_constant_override("separation", 10)
+		scroll_biomas.add_child(vbox_biomas)
+	
+		var crear_titulo = func(txt: String) -> Label:
+			var lbl = Label.new(); lbl.text = txt
+			lbl.add_theme_font_size_override("font_size", 14)
+			lbl.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			return lbl
+		
+		vbox_biomas.add_child(crear_titulo.call("🌍 Biomes"))
+		var grid_biomas = GridContainer.new()
+		grid_biomas.columns = 3; grid_biomas.add_theme_constant_override("h_separation", 6); grid_biomas.add_theme_constant_override("v_separation", 6)
+		vbox_biomas.add_child(grid_biomas)
+
+		vbox_biomas.add_child(crear_titulo.call("⛰️ Terrains"))
+		var grid_terrenos = GridContainer.new()
+		grid_terrenos.columns = 3; grid_terrenos.add_theme_constant_override("h_separation", 6); grid_terrenos.add_theme_constant_override("v_separation", 6)
+		vbox_biomas.add_child(grid_terrenos)
+
+		vbox_biomas.add_child(crear_titulo.call("✨ Features"))
+		var grid_carac = GridContainer.new()
+		grid_carac.columns = 3; grid_carac.add_theme_constant_override("h_separation", 6); grid_carac.add_theme_constant_override("v_separation", 6)
+		vbox_biomas.add_child(grid_carac)
+	
+		vbox_biomas.add_child(HSeparator.new())
+		var lbl_recursos = Label.new()
+		lbl_recursos.text = "💎 Available Resources:"
+		lbl_recursos.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_recursos.add_theme_font_size_override("font_size", 13)
+		vbox_biomas.add_child(lbl_recursos)
+	
+		var grid_recursos = GridContainer.new()
+		grid_recursos.columns = 5
+		grid_recursos.add_theme_constant_override("h_separation", 10)
+		grid_recursos.add_theme_constant_override("v_separation", 10)
+		grid_recursos.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox_biomas.add_child(grid_recursos)
+
+		var hbox_quitar = HBoxContainer.new()
+		hbox_quitar.alignment = BoxContainer.ALIGNMENT_CENTER
+		hbox_quitar.add_theme_constant_override("separation", 8)
+		vbox_biomas.add_child(hbox_quitar)
+
+		var btn_quitar_recurso = Button.new()
+		btn_quitar_recurso.text = "❌ Remove Resource"
+		btn_quitar_recurso.custom_minimum_size = Vector2(140, 46)
+		hbox_quitar.add_child(btn_quitar_recurso)
+
+		# --- PANTALLA DE CONSTRUCCIÓN ---
+		var panel_construccion = VBoxContainer.new()
+		panel_construccion.visible = false
+		panel_construccion.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		panel_construccion.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		contenedor_contenido_desplegable.add_child(panel_construccion)
+
+		var scroll_const = ScrollContainer.new()
+		scroll_const.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll_const.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		panel_construccion.add_child(scroll_const)
+	
+		var vbox_const_scroll = VBoxContainer.new()
+		vbox_const_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vbox_const_scroll.add_theme_constant_override("separation", 16)
+		scroll_const.add_child(vbox_const_scroll)
+
+		var lbl_header_genericos = Label.new()
+		lbl_header_genericos.text = "⬘ GENERIC MARKERS ⬘"
+		lbl_header_genericos.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_header_genericos.add_theme_font_size_override("font_size", 14)
+		lbl_header_genericos.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+		vbox_const_scroll.add_child(lbl_header_genericos)
+	
+		var grid_genericos = GridContainer.new()
+		grid_genericos.columns = 5; grid_genericos.add_theme_constant_override("h_separation", 14); grid_genericos.add_theme_constant_override("v_separation", 10)
+		grid_genericos.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox_const_scroll.add_child(grid_genericos)
+
+		var lbl_header_mejoras = Label.new()
+		lbl_header_mejoras.text = "⬘ IMPROVEMENTS ⬘"
+		lbl_header_mejoras.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_header_mejoras.add_theme_font_size_override("font_size", 14)
+		lbl_header_mejoras.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+		vbox_const_scroll.add_child(lbl_header_mejoras)
+
+		var grid_mejoras = GridContainer.new()
+		grid_mejoras.columns = 5; grid_mejoras.add_theme_constant_override("h_separation", 14); grid_mejoras.add_theme_constant_override("v_separation", 10)
+		grid_mejoras.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox_const_scroll.add_child(grid_mejoras)
+
+		var lbl_header_edificios = Label.new()
+		lbl_header_edificios.text = "⬘ BUILDINGS ⬘"
+		lbl_header_edificios.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_header_edificios.add_theme_font_size_override("font_size", 14)
+		lbl_header_edificios.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+		vbox_const_scroll.add_child(lbl_header_edificios)
+
+		var grid_edificios = GridContainer.new()
+		grid_edificios.columns = 5; grid_edificios.add_theme_constant_override("h_separation", 14); grid_edificios.add_theme_constant_override("v_separation", 10)
+		grid_edificios.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox_const_scroll.add_child(grid_edificios)
+	
+		var lbl_header_maravillas = Label.new()
+		lbl_header_maravillas.text = "⬘ WONDERS ⬘"
+		lbl_header_maravillas.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_header_maravillas.add_theme_font_size_override("font_size", 14)
+		lbl_header_maravillas.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+		vbox_const_scroll.add_child(lbl_header_maravillas)
+
+		var grid_maravillas = GridContainer.new()
+		grid_maravillas.columns = 5; grid_maravillas.add_theme_constant_override("h_separation", 14); grid_maravillas.add_theme_constant_override("v_separation", 10)
+		grid_maravillas.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox_const_scroll.add_child(grid_maravillas)
+	
+		vbox_const_scroll.add_child(HSeparator.new())
+	
+		var contenedor_borrar_edificios = VBoxContainer.new()
+		contenedor_borrar_edificios.add_theme_constant_override("separation", 6)
+		vbox_const_scroll.add_child(contenedor_borrar_edificios)
+
+		# --- PANTALLA EXTERNOS ---
+		var panel_externos = VBoxContainer.new()
+		panel_externos.visible = false
+		panel_externos.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		panel_externos.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		panel_externos.add_theme_constant_override("separation", 6)
+		contenedor_contenido_desplegable.add_child(panel_externos)
+
+		var lbl_ext_edif = Label.new()
+		lbl_ext_edif.text = "External buildings:"
+		panel_externos.add_child(lbl_ext_edif)
+
+		var scroll_ext_edif = ScrollContainer.new()
+		scroll_ext_edif.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll_ext_edif.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		scroll_ext_edif.size_flags_stretch_ratio = 0.6
+		panel_externos.add_child(scroll_ext_edif)
+
+		var contenedor_edificios_externos = GridContainer.new()
+		contenedor_edificios_externos.columns = 5; contenedor_edificios_externos.add_theme_constant_override("h_separation", 14); contenedor_edificios_externos.add_theme_constant_override("v_separation", 10)
+		contenedor_edificios_externos.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		scroll_ext_edif.add_child(contenedor_edificios_externos)
+
+		var lbl_ext_mej = Label.new()
+		lbl_ext_mej.text = "External improvements:"
+		panel_externos.add_child(lbl_ext_mej)
+
+		var scroll_ext_mej = ScrollContainer.new()
+		scroll_ext_mej.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll_ext_mej.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		scroll_ext_mej.size_flags_stretch_ratio = 0.4
+		panel_externos.add_child(scroll_ext_mej)
+
+		var contenedor_mejoras_externas = GridContainer.new()
+		contenedor_mejoras_externas.columns = 5; contenedor_mejoras_externas.add_theme_constant_override("h_separation", 14); contenedor_mejoras_externas.add_theme_constant_override("v_separation", 10)
+		contenedor_mejoras_externas.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		scroll_ext_mej.add_child(contenedor_mejoras_externas)
+
+		var btn_del_ext = Button.new()
+		btn_del_ext.text = "❌ DELETE EXTERNAL CONTENT"
+		btn_del_ext.custom_minimum_size = Vector2(0, 36)
+		btn_del_ext.pressed.connect(main._borrar_externo)
+		panel_externos.add_child(btn_del_ext)
+
+		# 2b. VISOR DE FELICIDAD (modo lectura: sin edición, solo cambia appeal al clicar)
+		var panel_felicidad = VBoxContainer.new()
+		panel_felicidad.name = "PanelFelicidad"
+		panel_felicidad.visible = false
+		panel_felicidad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		panel_felicidad.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		panel_felicidad.add_theme_constant_override("separation", 10)
+		contenedor_contenido_desplegable.add_child(panel_felicidad)
+
+		var lbl_fel_titulo = Label.new()
+		lbl_fel_titulo.text = "😊 HAPPINESS VIEWER"
+		lbl_fel_titulo.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_fel_titulo.add_theme_font_size_override("font_size", 14)
+		lbl_fel_titulo.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+		panel_felicidad.add_child(lbl_fel_titulo)
+
+		var lbl_fel_info = Label.new()
+		lbl_fel_info.name = "LblFelicidadInfo"
+		lbl_fel_info.text = "Click a cell to cycle:\nNormal → Appealing → Charming → Normal.\nGray = Normal, light green = Appealing, dark green = Charming."
+		lbl_fel_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_fel_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl_fel_info.add_theme_font_size_override("font_size", 13)
+		panel_felicidad.add_child(lbl_fel_info)
+
+		var hbox_fel_salir = HBoxContainer.new()
+		hbox_fel_salir.alignment = BoxContainer.ALIGNMENT_CENTER
+		panel_felicidad.add_child(hbox_fel_salir)
+
+		var btn_salir_felicidad = Button.new()
+		btn_salir_felicidad.text = "⬅ Back to Settlements"
+		btn_salir_felicidad.custom_minimum_size = Vector2(220, 40)
+		btn_salir_felicidad.pressed.connect(func(): main.cambiar_seccion("ASENTAMIENTOS"))
+		hbox_fel_salir.add_child(btn_salir_felicidad)
+
+		# 3. ASENTAMIENTOS, GUARDADO Y ERA
+		var panel_asentamientos_ui = VBoxContainer.new()
+		panel_asentamientos_ui.visible = false
+		panel_asentamientos_ui.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		panel_asentamientos_ui.add_theme_constant_override("separation", 12)
+		contenedor_contenido_desplegable.add_child(panel_asentamientos_ui)
+	
+		var hbox_top_actions = HBoxContainer.new()
+		hbox_top_actions.alignment = BoxContainer.ALIGNMENT_CENTER
+		hbox_top_actions.add_theme_constant_override("separation", 8)
+		panel_asentamientos_ui.add_child(hbox_top_actions)
+	
+		var btn_nueva_partida = Button.new()
+		btn_nueva_partida.text = "🌟 New Game"
+		btn_nueva_partida.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn_nueva_partida.custom_minimum_size = Vector2(0, 38)
+		var style_nv = StyleBoxFlat.new()
+		style_nv.bg_color = Color(0.2, 0.6, 0.2)
+		style_nv.set_corner_radius_all(6)
+		btn_nueva_partida.add_theme_stylebox_override("normal", style_nv)
+		btn_nueva_partida.pressed.connect(main.mostrar_dialogo_lideres_inicio) # <-- Modificado para ir a Lider primero
+		hbox_top_actions.add_child(btn_nueva_partida)
+	
+		var btn_guardar = Button.new()
+		btn_guardar.text = "💾 Save"
+		btn_guardar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn_guardar.custom_minimum_size = Vector2(0, 38)
+		var style_sv = StyleBoxFlat.new()
+		style_sv.bg_color = Color(0.2, 0.45, 0.8)
+		style_sv.set_corner_radius_all(6)
+		btn_guardar.add_theme_stylebox_override("normal", style_sv)
+		btn_guardar.pressed.connect(main.mostrar_dialogo_guardar_como)
+		hbox_top_actions.add_child(btn_guardar)
+	
+		var btn_cargar = Button.new()
+		btn_cargar.text = "📁 Load"
+		btn_cargar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn_cargar.custom_minimum_size = Vector2(0, 38)
+		var style_ld = StyleBoxFlat.new()
+		style_ld.bg_color = Color(0.75, 0.2, 0.2)
+		style_ld.set_corner_radius_all(6)
+		btn_cargar.add_theme_stylebox_override("normal", style_ld)
+		btn_cargar.pressed.connect(main.mostrar_dialogo_cargar)
+		hbox_top_actions.add_child(btn_cargar)
+
+		# --- Panel Compacto Superior (Era + Lider + Civ + Botones) ---
+		var panel_estado_era = PanelContainer.new()
+		aplicar_estilo_moderno_panel(panel_estado_era)
+		panel_asentamientos_ui.add_child(panel_estado_era)
+	
+		var margin_ee = MarginContainer.new()
+		margin_ee.add_theme_constant_override("margin_left", 8)
+		margin_ee.add_theme_constant_override("margin_top", 8)
+		margin_ee.add_theme_constant_override("margin_right", 8)
+		margin_ee.add_theme_constant_override("margin_bottom", 8)
+		panel_estado_era.add_child(margin_ee)
+	
+		var hbox_ee = HBoxContainer.new()
+		hbox_ee.add_theme_constant_override("separation", 16)
+		hbox_ee.alignment = BoxContainer.ALIGNMENT_CENTER
+		margin_ee.add_child(hbox_ee)
+	
+		# Columna 1: Textos (Save/Era)
+		var vbox_labels = VBoxContainer.new()
+		vbox_labels.alignment = BoxContainer.ALIGNMENT_CENTER
+		vbox_labels.add_theme_constant_override("separation", 6)
+		hbox_ee.add_child(vbox_labels)
+	
+		var lbl_nombre_partida = Label.new()
+		lbl_nombre_partida.text = "💾 Autosave"
+		lbl_nombre_partida.add_theme_font_size_override("font_size", 12)
+		vbox_labels.add_child(lbl_nombre_partida)
+	
+		var lbl_era_actual = Label.new()
+		lbl_era_actual.text = "🏛️ Antiquity"
+		lbl_era_actual.add_theme_font_size_override("font_size", 12)
+		vbox_labels.add_child(lbl_era_actual)
+
+		# Columna 2: Visual Líder (Entre Era y Civ)
+		var vbox_lider = VBoxContainer.new()
+		vbox_lider.alignment = BoxContainer.ALIGNMENT_CENTER
+		var tex_lider = TextureRect.new()
+		tex_lider.custom_minimum_size = Vector2(40, 40)
+		tex_lider.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex_lider.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		vbox_lider.add_child(tex_lider)
+		var lbl_lider_nombre = Label.new()
+		lbl_lider_nombre.add_theme_font_size_override("font_size", 11)
+		lbl_lider_nombre.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vbox_lider.add_child(lbl_lider_nombre)
+		hbox_ee.add_child(vbox_lider)
+	
+		# Columna 3: Visual Civ
+		var lbl_civ_actual = HBoxContainer.new()
+		lbl_civ_actual.add_theme_constant_override("separation", 8)
+		lbl_civ_actual.alignment = BoxContainer.ALIGNMENT_CENTER
+		hbox_ee.add_child(lbl_civ_actual)
+	
+		var contenedor_civs_visual = HBoxContainer.new()
+		contenedor_civs_visual.name = "ContenedorCivsVisual"
+		contenedor_civs_visual.add_theme_constant_override("separation", 8)
+		lbl_civ_actual.add_child(contenedor_civs_visual)
+	
+		# Columna 4: Botones
+		var buttons_vbox = VBoxContainer.new()
+		buttons_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+		buttons_vbox.add_theme_constant_override("separation", 6)
+		hbox_ee.add_child(buttons_vbox)
+	
+		var btn_sincretismo = Button.new()
+		btn_sincretismo.text = "Syncretism"
+		btn_sincretismo.custom_minimum_size = Vector2(100, 26)
+		btn_sincretismo.add_theme_font_size_override("font_size", 11)
+		var style_sync = StyleBoxFlat.new()
+		style_sync.bg_color = Color(0.18, 0.18, 0.22)
+		style_sync.border_color = Color(0.4, 0.4, 0.45)
+		style_sync.set_border_width_all(1)
+		style_sync.set_corner_radius_all(6)
+		btn_sincretismo.add_theme_stylebox_override("normal", style_sync)
+		btn_sincretismo.pressed.connect(main.mostrar_dialogo_sincretismo)
+		buttons_vbox.add_child(btn_sincretismo)
+	
+		var btn_avanzar_era = Button.new()
+		btn_avanzar_era.text = "Exploration"
+		btn_avanzar_era.custom_minimum_size = Vector2(100, 26)
+		btn_avanzar_era.add_theme_font_size_override("font_size", 11)
+		var style_btn = StyleBoxFlat.new()
+		style_btn.set_corner_radius_all(6)
+		btn_avanzar_era.add_theme_stylebox_override("normal", style_btn)
+		btn_avanzar_era.pressed.connect(main.mostrar_dialogo_confirmar_siguiente_era)
+		buttons_vbox.add_child(btn_avanzar_era)
+
+		var lbl_asent_title = Label.new()
+		lbl_asent_title.text = "🏛️ SETTLEMENT MANAGEMENT"
+		lbl_asent_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		panel_asentamientos_ui.add_child(lbl_asent_title)
+	
+		var hbox_add = HBoxContainer.new()
+		hbox_add.alignment = BoxContainer.ALIGNMENT_CENTER
+		hbox_add.add_theme_constant_override("separation", 10)
+		panel_asentamientos_ui.add_child(hbox_add)
+	
+		var btn_add_pueblo = Button.new()
+		btn_add_pueblo.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn_add_pueblo.custom_minimum_size = Vector2(0, 42)
+	
+		var hb_p = HBoxContainer.new()
+		hb_p.set_anchors_preset(Control.PRESET_FULL_RECT)
+		hb_p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hb_p.alignment = BoxContainer.ALIGNMENT_CENTER
+		hb_p.add_theme_constant_override("separation", 8)
+	
+		var tex_p = TextureRect.new()
+		tex_p.custom_minimum_size = Vector2(24, 24)
+		tex_p.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex_p.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		if ResourceLoader.exists("res://assets/town.png"): tex_p.texture = load("res://assets/town.png")
+		hb_p.add_child(tex_p)
+	
+		var lbl_p = Label.new()
+		lbl_p.text = "Town"
+		hb_p.add_child(lbl_p)
+		btn_add_pueblo.add_child(hb_p)
+		btn_add_pueblo.pressed.connect(func(): main.crear_nuevo_asentamiento("Town"))
+		hbox_add.add_child(btn_add_pueblo)
+	
+		var btn_add_ciudad = Button.new()
+		btn_add_ciudad.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn_add_ciudad.custom_minimum_size = Vector2(0, 42)
+	
+		var hb_c = HBoxContainer.new()
+		hb_c.set_anchors_preset(Control.PRESET_FULL_RECT)
+		hb_c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hb_c.alignment = BoxContainer.ALIGNMENT_CENTER
+		hb_c.add_theme_constant_override("separation", 8)
+	
+		var tex_c = TextureRect.new()
+		tex_c.custom_minimum_size = Vector2(24, 24)
+		tex_c.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex_c.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		if ResourceLoader.exists("res://assets/settlement.png"): tex_c.texture = load("res://assets/settlement.png")
+		hb_c.add_child(tex_c)
+	
+		var lbl_c = Label.new()
+		lbl_c.text = "City"
+		hb_c.add_child(lbl_c)
+		btn_add_ciudad.add_child(hb_c)
+		btn_add_ciudad.pressed.connect(func(): main.crear_nuevo_asentamiento("City"))
+		hbox_add.add_child(btn_add_ciudad)
+	
+		var scroll_lista_asent = ScrollContainer.new()
+		scroll_lista_asent.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		panel_asentamientos_ui.add_child(scroll_lista_asent)
+	
+		var contenedor_lista_asentamientos = VBoxContainer.new()
+		contenedor_lista_asentamientos.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		contenedor_lista_asentamientos.add_theme_constant_override("separation", 6)
+		scroll_lista_asent.add_child(contenedor_lista_asentamientos)
+
+		btn_menu_asentamientos.pressed.connect(func(): main.cambiar_seccion("ASENTAMIENTOS"))
+		btn_menu_pincel.pressed.connect(func(): main.cambiar_seccion("PINCEL"))
+		btn_modo_construccion.pressed.connect(func(): main.cambiar_seccion("CONSTRUCCION"))
+		btn_modo_externos.pressed.connect(func(): main.cambiar_seccion("EXTERNOS"))
+		btn_menu_felicidad.pressed.connect(func(): main.cambiar_seccion("FELICIDAD"))
+		btn_quitar_recurso.pressed.connect(func(): main._aplicar_recurso(""))
+
+		return {
+			"btn_menu_pincel": btn_menu_pincel,
+			"btn_menu_asentamientos": btn_menu_asentamientos,
+			"btn_modo_construccion": btn_modo_construccion,
+			"btn_modo_externos": btn_modo_externos,
+			"btn_menu_felicidad": btn_menu_felicidad,
+			"panel_felicidad": panel_felicidad,
+			"panel_biomas": panel_biomas,
+			"panel_construccion": panel_construccion,
+			"grid_biomas": grid_biomas,
+			"grid_terrenos": grid_terrenos,
+			"grid_carac": grid_carac,
+			"grid_recursos": grid_recursos,
+			"grid_genericos": grid_genericos,
+			"lbl_header_genericos": lbl_header_genericos,
+			"grid_mejoras": grid_mejoras,
+			"lbl_header_mejoras": lbl_header_mejoras,
+			"grid_edificios": grid_edificios,
+			"lbl_header_edificios": lbl_header_edificios,
+			"grid_maravillas": grid_maravillas,
+			"lbl_header_maravillas": lbl_header_maravillas,
+			"contenedor_borrar_edificios": contenedor_borrar_edificios,
+			"panel_externos": panel_externos,
+			"contenedor_edificios_externos": contenedor_edificios_externos,
+			"contenedor_mejoras_externas": contenedor_mejoras_externas,
+			"panel_asentamientos_ui": panel_asentamientos_ui,
+			"contenedor_lista_asentamientos": contenedor_lista_asentamientos,
+			"btn_quitar_recurso": btn_quitar_recurso,
+			"lbl_era_actual": lbl_era_actual,
+			"lbl_civ_actual": lbl_civ_actual,
+			"btn_avanzar_era": btn_avanzar_era,
+			"btn_sincretismo": btn_sincretismo,
+			"tex_lider": tex_lider,
+			"lbl_lider_nombre": lbl_lider_nombre,
+			"panel_info": panel_info,
+			"lbl_info": lbl_info,
+			"lbl_nombre_partida": lbl_nombre_partida,
+			"scroll_biomas": scroll_biomas,
+			"lbl_ext_edif": lbl_ext_edif,
+			"lbl_ext_mej": lbl_ext_mej,
+			"scroll_ext_edif": scroll_ext_edif,
+			"scroll_ext_mej": scroll_ext_mej,
+			"btn_del_ext": btn_del_ext
+		}

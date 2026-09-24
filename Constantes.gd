@@ -1,6 +1,18 @@
 extends Node
 class_name Constantes
 
+# ==============================================================================
+# CONSTANTES DEL JUEGO - ÚNICO ORIGEN DE VERDAD DE LOS DATOS ESTÁTICOS
+# ------------------------------------------------------------------------------
+# Contiene TODOS los datos del juego: eras, civilizaciones, biomas, terrenos,
+# características, recursos, edificios, mejoras, maravillas naturales y líderes.
+# NO contiene lógica de juego ni estado de partida: es consumido de forma estática
+# por Main.gd (por ejemplo: Constantes.DATOS_EDIFICIOS, Constantes.RECURSOS_POR_ERA).
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# ERAS Y CIVILIZACIONES
+# ------------------------------------------------------------------------------
 const ORDEN_ERAS = {
 	"Antiquity": 1,
 	"Exploration": 2,
@@ -18,6 +30,9 @@ const TODAS_LAS_CIVS = [
 	"American", "British", "Bugandan", "French Imperial", "Joseon", "Meiji Japanese", "Mexican", "Mughal", "Nepalese", "Ottoman", "Prussian", "Qajar", "Qing", "Russian", "Siamese"
 ]
 
+# ------------------------------------------------------------------------------
+# BIOMAS, TERRENOS Y CARACTERISTICAS
+# ------------------------------------------------------------------------------
 const BIOMAS = ["TUNDRA", "GRASSLAND", "PLAINS", "DESERT", "TROPICAL", "MARINE"]
 const TERRENOS_TIERRA = ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER"]
 const TERRENOS_AGUA = ["LAKE", "COASTAL", "OCEAN"]
@@ -37,6 +52,9 @@ const ICONOS_TERRENO = {
 	"LAKE": "🛶", "COASTAL": "🌊", "OCEAN": "🐋"
 }
 
+# ------------------------------------------------------------------------------
+# RECURSOS
+# ------------------------------------------------------------------------------
 const RENDIMIENTOS_RECURSOS = {
 	"Camels": "Gold", "Clay": "Production", "Cotton": "Gold", "Cowrie": "Happiness", 
 	"Crabs": "Food", "Dates": "Food", "Dyes": "Culture", "Fish": "Food", 
@@ -56,27 +74,27 @@ const RENDIMIENTOS_RECURSOS = {
 
 const RECURSOS_POR_ERA = {
 	"Antiquity": {
-		"Camels": ["DESERT", "PLAINS"], "Clay": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"], "Cotton": ["DESERT", "PLAINS", "GRASSLAND"], 
+		"Camels": ["DESERT", "PLAINS"], "Clay": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Cotton": ["DESERT", "PLAINS", "GRASSLAND"], 
 		"Cowrie": ["MARINE"], "Crabs": ["MARINE"], "Dates": ["DESERT"], "Dyes": ["MARINE"], "Fish": ["MARINE"],
 		"Flax": ["PLAINS", "GRASSLAND"], "Gold": ["PLAINS", "GRASSLAND", "TROPICAL"], "Gypsum": ["PLAINS", "TUNDRA"], 
 		"Hardwood": ["TUNDRA", "TROPICAL"], "Hides": ["TUNDRA"], "Horses": ["PLAINS", "GRASSLAND"], 
-		"Incense": ["DESERT", "PLAINS"], "Iron": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"], "Ivory": ["DESERT", "PLAINS", "GRASSLAND", "TROPICAL"], 
+		"Incense": ["DESERT", "PLAINS"], "Iron": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Ivory": ["DESERT", "PLAINS", "GRASSLAND", "TROPICAL"], 
 		"Jade": ["PLAINS", "TUNDRA", "TROPICAL"], "Kaolin": ["PLAINS", "GRASSLAND", "TROPICAL"], 
 		"Lapis Lazuli": ["DESERT", "PLAINS"], "Limestone": ["DESERT", "PLAINS", "GRASSLAND"], "Llamas": ["TROPICAL"], 
 		"Mangoes": ["TROPICAL"], "Marble": ["PLAINS", "GRASSLAND"], "Pearls": ["MARINE"], "Rice": ["PLAINS", "GRASSLAND", "TROPICAL"], 
 		"Rubies": ["DESERT", "PLAINS", "TROPICAL"], "Salt": ["DESERT", "PLAINS", "TUNDRA"], "Silk": ["PLAINS", "GRASSLAND", "TROPICAL"], 
 		"Silver": ["DESERT", "TUNDRA"], "Tin": ["PLAINS", "TROPICAL"], "Turtles": ["MARINE"], 
-		"Wild Game": ["GRASSLAND", "TUNDRA", "TROPICAL"], "Wine": ["PLAINS", "GRASSLAND"], "Wool": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"]
+		"Wild Game": ["GRASSLAND", "TUNDRA", "TROPICAL"], "Wine": ["PLAINS", "GRASSLAND"], "Wool": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"]
 	},
 	"Exploration": {
-		"Camels": ["DESERT", "PLAINS"], "Clay": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"], "Cloves": ["TROPICAL", "MARINE"], "Cocoa": ["TROPICAL"],
+		"Camels": ["DESERT", "PLAINS"], "Clay": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Cloves": ["TROPICAL", "MARINE"], "Cocoa": ["TROPICAL"],
 		"Cotton": ["DESERT", "PLAINS", "GRASSLAND"], "Cowrie": ["MARINE"], "Crabs": ["MARINE"], "Dates": ["DESERT"],
 		"Dyes": ["MARINE"], "Fish": ["MARINE"], "Flax": ["PLAINS", "GRASSLAND"], "Furs": ["PLAINS", "TUNDRA"],
 		"Gold": ["PLAINS", "GRASSLAND", "TROPICAL"], "Gypsum": ["PLAINS", "TUNDRA"], "Hardwood": ["TUNDRA", "TROPICAL"],
-		"Horses": ["PLAINS", "GRASSLAND"], "Incense": ["DESERT", "PLAINS"], "Iron": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"],
+		"Horses": ["PLAINS", "GRASSLAND"], "Incense": ["DESERT", "PLAINS"], "Iron": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"],
 		"Ivory": ["DESERT", "PLAINS", "GRASSLAND", "TROPICAL"], "Jade": ["PLAINS", "TUNDRA", "TROPICAL"], 
 		"Kaolin": ["PLAINS", "GRASSLAND", "TROPICAL"], "Limestone": ["DESERT", "PLAINS", "GRASSLAND"], 
-		"Llamas": ["TROPICAL"], "Mangoes": ["TROPICAL"], "Marble": ["PLAINS", "GRASSLAND"], "Niter": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"],
+		"Llamas": ["TROPICAL"], "Mangoes": ["TROPICAL"], "Marble": ["PLAINS", "GRASSLAND"], "Niter": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"],
 		"Pearls": ["MARINE"], "Pitch": ["PLAINS", "GRASSLAND", "TROPICAL"], "Rice": ["PLAINS", "GRASSLAND", "TROPICAL"], 
 		"Rubies": ["DESERT", "PLAINS", "TROPICAL"], "Silk": ["PLAINS", "GRASSLAND", "TROPICAL"], "Silver": ["DESERT", "TUNDRA"], 
 		"Spices": ["GRASSLAND", "TROPICAL"], "Sugar": ["PLAINS", "GRASSLAND", "TROPICAL"], "Tea": ["PLAINS", "GRASSLAND"], 
@@ -90,7 +108,7 @@ const RECURSOS_POR_ERA = {
 		"Gold": ["PLAINS", "GRASSLAND", "TROPICAL"], "Hardwood": ["TUNDRA", "TROPICAL"], "Horses": ["PLAINS", "GRASSLAND"], 
 		"Ivory": ["DESERT", "PLAINS", "GRASSLAND", "TROPICAL"], "Kaolin": ["PLAINS", "GRASSLAND", "TROPICAL"], 
 		"Limestone": ["DESERT", "PLAINS", "GRASSLAND"], "Llamas": ["TROPICAL"], "Marble": ["PLAINS", "GRASSLAND"],
-		"Nickel": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"], "Niter": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"], "Oil": ["DESERT", "GRASSLAND", "TUNDRA"], "Pearls": ["MARINE"], 
+		"Nickel": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Niter": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Oil": ["DESERT", "GRASSLAND", "TUNDRA"], "Pearls": ["MARINE"], 
 		"Pitch": ["PLAINS", "GRASSLAND", "TROPICAL"], "Quinine": ["PLAINS", "GRASSLAND"], "Rice": ["PLAINS", "GRASSLAND", "TROPICAL"], 
 		"Rubber": ["GRASSLAND", "TROPICAL"], "Silk": ["PLAINS", "GRASSLAND", "TROPICAL"], "Silver": ["DESERT", "TUNDRA"], 
 		"Spices": ["GRASSLAND", "TROPICAL"], "Sugar": ["PLAINS", "GRASSLAND", "TROPICAL"], "Tea": ["PLAINS", "GRASSLAND"], 
@@ -99,6 +117,9 @@ const RECURSOS_POR_ERA = {
 	}
 }
 
+# ------------------------------------------------------------------------------
+# EDIFICIOS Y MARAVILLAS CONSTRUIBLES
+# ------------------------------------------------------------------------------
 const DATOS_EDIFICIOS = {
 	"Food B.": {"rendimiento": "Food", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
 	"Production B.": {"rendimiento": "Production", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
@@ -295,6 +316,9 @@ const DATOS_EDIFICIOS = {
 	"World's Fair": {"rendimiento": "Culture", "era": "Modern Age", "base": 6, "desc": "+6 Infl, Happy, Sci. +2 Wonder Tourism.", "req_terreno": [], "req_rio": false, "full_tile": true, "is_wonder": true, "tipo": "Standard"}
 }
 
+# ------------------------------------------------------------------------------
+# MEJORAS
+# ------------------------------------------------------------------------------
 const DATOS_MEJORAS = {
 	"Quarry": {"tipo": "Production", "era": "Antiquity"},
 	"Clay Pit": {"tipo": "Production", "era": "Antiquity"},
@@ -352,6 +376,9 @@ const DATOS_MEJORAS = {
 	"Shore Battery": {"tipo": "Defense", "era": "Modern Age"}
 }
 
+# ------------------------------------------------------------------------------
+# MARAVILLAS NATURALES
+# ------------------------------------------------------------------------------
 const MARAVILLAS_NATURALES = {
 	"Bermuda Triangle": {"terreno": ["OCEAN"], "bioma": ["MARINE"], "yields": {"Science": 2, "Culture": 2}},
 	"Grand Canyon": {"terreno": ["ROUGH"], "bioma": ["DESERT"], "yields": {"Culture": 2, "Happiness": 4}},
@@ -362,9 +389,9 @@ const MARAVILLAS_NATURALES = {
 	"Iguazú Falls": {"terreno": ["FLAT"], "bioma": ["TROPICAL"], "yields": {"Happiness": 2, "Food": 4}},
 	"Machapuchare": {"terreno": ["MOUNTAINOUS"], "bioma": ["TROPICAL"], "yields": {"Production": 4, "Culture": 2}},
 	"Mapu 'a Vaea Blowholes": {"terreno": ["COASTAL"], "bioma": ["MARINE"], "yields": {"Production": 2, "Happiness": 4}},
-	"Mount Everest": {"terreno": ["MOUNTAINOUS"], "bioma": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"], "yields": {"Culture": 2, "Happiness": 2, "Influence": 2}},
-	"Mount Fuji": {"terreno": ["MOUNTAINOUS"], "bioma": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"], "yields": {"Gold": 2, "Culture": 2, "Happiness": 2}},
-	"Mount Kilimanjaro": {"terreno": ["MOUNTAINOUS"], "bioma": ["DESERT", "PLAINS", "GRASSLAND, TUNDRA, TROPICAL"], "yields": {"Production": 2, "Happiness": 4}},
+	"Mount Everest": {"terreno": ["MOUNTAINOUS"], "bioma": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "yields": {"Culture": 2, "Happiness": 2, "Influence": 2}},
+	"Mount Fuji": {"terreno": ["MOUNTAINOUS"], "bioma": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "yields": {"Gold": 2, "Culture": 2, "Happiness": 2}},
+	"Mount Kilimanjaro": {"terreno": ["MOUNTAINOUS"], "bioma": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "yields": {"Production": 2, "Happiness": 4}},
 	"Nachi Falls": {"terreno": ["MOUNTAINOUS"], "bioma": ["TROPICAL"], "yields": {"Culture": 6}},
 	"Redwood Forest": {"terreno": ["FLAT", "ROUGH"], "bioma": ["GRASSLAND"], "yields": {"Food": 2, "Happiness": 2, "Production": 2}},
 	"Seongsan Ilchulbong": {"terreno": ["COASTAL"], "bioma": ["MARINE"], "yields": {"Happiness": 6}},
@@ -377,6 +404,9 @@ const MARAVILLAS_NATURALES = {
 	"Zhangjiajie": {"terreno": ["MOUNTAINOUS"], "bioma": ["TROPICAL"], "yields": {"Happiness": 2, "Production": 4}}
 }
 
+# ------------------------------------------------------------------------------
+# LIDERES
+# ------------------------------------------------------------------------------
 const LIDERES = [
 	"Ada Lovelace", "Alexander", "Amina", "Ashoka World Renouncer", "Augustus",
 	"Benjamin Franklin", "Catherine the Great", "Charlemagne", "Confucius",
@@ -408,6 +438,9 @@ const DATOS_LIDERES = {
 	"Xerxes the Achaemenid": {"bonos": ["yields_on_uniques"]}
 }
 
+# ------------------------------------------------------------------------------
+# UTILIDADES DE COLOR
+# ------------------------------------------------------------------------------
 static func obtener_color_rendimiento(rendimiento: String) -> Color:
 	match rendimiento:
 		"Food": return Color(0.2, 0.75, 0.2)
