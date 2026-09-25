@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ctgvpo65rfhlu"
-path="res://.godot/imported/edward teach.png-7e7c76cbe2892140ceb961bec48e7767.ctex"
+uid="uid://7mvhyipp4fqh"
+path="res://.godot/imported/edward_teach.png-7aaad40bf9ffec449b84997e8907fdf2.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/edward teach.png"
-dest_files=["res://.godot/imported/edward teach.png-7e7c76cbe2892140ceb961bec48e7767.ctex"]
+source_file="res://assets/edward_teach.png"
+dest_files=["res://.godot/imported/edward_teach.png-7aaad40bf9ffec449b84997e8907fdf2.ctex"]
 
 [params]
 

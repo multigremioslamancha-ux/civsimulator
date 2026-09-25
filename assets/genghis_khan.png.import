@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://vip8lwocxy3q"
-path="res://.godot/imported/genghis_han.png-e73ac11ed38775d9aa9e58903f9cbd8d.ctex"
+uid="uid://dn72qomc1ms3a"
+path="res://.godot/imported/genghis_khan.png-72b73741303a3cc44b5c9b2ad8ebb2f5.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/genghis_han.png"
-dest_files=["res://.godot/imported/genghis_han.png-e73ac11ed38775d9aa9e58903f9cbd8d.ctex"]
+source_file="res://assets/genghis_khan.png"
+dest_files=["res://.godot/imported/genghis_khan.png-72b73741303a3cc44b5c9b2ad8ebb2f5.ctex"]
 
 [params]
 

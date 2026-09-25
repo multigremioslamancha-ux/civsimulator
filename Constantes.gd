@@ -121,15 +121,6 @@ const RECURSOS_POR_ERA = {
 # EDIFICIOS Y MARAVILLAS CONSTRUIBLES
 # ------------------------------------------------------------------------------
 const DATOS_EDIFICIOS = {
-	"Food B.": {"rendimiento": "Food", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
-	"Production B.": {"rendimiento": "Production", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
-	"Gold B.": {"rendimiento": "Gold", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
-	"Science B.": {"rendimiento": "Science", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
-	"Culture B.": {"rendimiento": "Culture", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
-	"Happiness B.": {"rendimiento": "Happiness", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
-	"Influence B.": {"rendimiento": "Influence", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": false, "is_generic": true, "tipo": "Generic"},
-	"Marvel": {"rendimiento": "Marvel", "era": "All", "base": 0, "desc": "Generic Marker", "req_terreno": ["FLAT", "ROUGH", "MOUNTAINOUS", "NAVIGABLE_RIVER", "COASTAL", "OCEAN", "LAKE"], "req_rio": false, "full_tile": true, "is_wonder": true, "is_generic": true, "tipo": "Generic"},
-	
 	"Town Hall": {"rendimiento": "Town Hall", "era": "All", "base": 0, "desc": "Settlement Center", "req_terreno": [], "req_rio": false, "full_tile": false, "adj_barrio": false, "tipo": "Central"},
 	"Palace": {"rendimiento": "Palace", "era": "All", "base": 0, "desc": "Seat of Government", "req_terreno": [], "req_rio": false, "full_tile": false, "adj_barrio": false, "tipo": "Central"},
 	
@@ -451,10 +442,9 @@ static func obtener_color_rendimiento(rendimiento: String) -> Color:
 		"Production": return Color(0.85, 0.2, 0.2)
 		"Warehouse": return Color(0.5, 0.5, 0.5)
 		"Influence": return Color(0.7, 0.4, 0.9)
-		"Marvel": return Color(0.9, 0.4, 0.7)
 		_: return Color(0.35, 0.35, 0.35)
 
 static func obtener_color_texto(rendimiento: String) -> Color:
 	match rendimiento:
-		"Food", "Gold", "Happiness", "Marvel": return Color.BLACK
+		"Food", "Gold", "Happiness": return Color.BLACK
 		_: return Color.WHITE

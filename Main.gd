@@ -80,8 +80,6 @@ var grid_maravillas_naturales: GridContainer
 var panel_construccion: VBoxContainer
 var grid_recursos: GridContainer
 var btn_quitar_recurso: Button
-var grid_genericos: GridContainer
-var lbl_header_genericos: Label
 var grid_mejoras: GridContainer
 var lbl_header_mejoras: Label
 var grid_edificios: GridContainer
@@ -145,8 +143,6 @@ func _ready() -> void:
 	panel_construccion = refs.get("panel_construccion")
 	grid_recursos = refs.get("grid_recursos")
 	btn_quitar_recurso = refs.get("btn_quitar_recurso")
-	grid_genericos = refs.get("grid_genericos")
-	lbl_header_genericos = refs.get("lbl_header_genericos")
 	grid_mejoras = refs.get("grid_mejoras")
 	lbl_header_mejoras = refs.get("lbl_header_mejoras")
 	grid_edificios = refs.get("grid_edificios")
@@ -1393,11 +1389,9 @@ func _crear_cabecera_panel(texto: String, asset_name: String) -> HBoxContainer:
 	return hbox
 
 func actualizar_panel_construccion():
-	if grid_genericos: grid_genericos.visible = false
 	if grid_mejoras: grid_mejoras.visible = false
 	if grid_edificios: grid_edificios.visible = false
 	if grid_maravillas: grid_maravillas.visible = false
-	if lbl_header_genericos: lbl_header_genericos.visible = false
 	if lbl_header_mejoras: lbl_header_mejoras.visible = false
 	if lbl_header_edificios: lbl_header_edificios.visible = false
 	if lbl_header_maravillas: lbl_header_maravillas.visible = false
@@ -1513,19 +1507,19 @@ func actualizar_panel_construccion():
 				for e in c.edificios:
 					if not ReglasJuego.es_edificio_obsoleto(e, c.q * Vector2i.RIGHT + c.r * Vector2i.DOWN, era_actual, city_grid): edificios_construidos[e] = true
 					
-			var rendimientos_validos = {}
-			var maravillas_validas = false
+			var lista_candidatos = []
 			
 			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
 				var d = Constantes.DATOS_EDIFICIOS[edif_nombre]
-				if d.get("is_generic", false) or edif_nombre in ["Palace", "Town Hall"]: continue
+				if edif_nombre in ["Palace", "Town Hall"]: continue
+				
+				var is_wonder = d.get("is_wonder", false)
+				var es_muralla = ReglasJuego.es_edificio_muralla(edif_nombre)
 				
 				var era_edif = d.get("era", "All")
 				if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
 				if d.has("civ") and d.civ != civ_actual and d.civ != civ_sincretismo: continue
-				
-				var es_muralla = ReglasJuego.es_edificio_muralla(edif_nombre)
-				if edificios_construidos.has(edif_nombre) and not d.get("is_wonder", false) and not es_muralla: continue
+				if edificios_construidos.has(edif_nombre) and not is_wonder and not es_muralla: continue
 				if edif_nombre in datos_c.edificios: continue
 				
 				if not ReglasJuego.es_ubicacion_valida_para_edificio(celda_seleccionada, edif_nombre, asent_centro, era_actual, civ_actual, city_grid, asent_tipo, asentamientos): continue
@@ -1538,49 +1532,8 @@ func actualizar_panel_construccion():
 						if not ReglasJuego.es_edificio_muralla(e) and not ReglasJuego.es_edificio_obsoleto(e, celda_seleccionada, era_actual, city_grid): reg_count += 1
 					if reg_count >= 2 and not is_full_tile: continue
 					
-				if d.get("is_wonder", false): maravillas_validas = true
-				else:
-					var rend_principal = d.get("rendimiento", "")
-					if rend_principal != "": rendimientos_validos[rend_principal] = true
-					var rend_secundario = d.get("rendimiento_secundario", "")
-					if rend_secundario != "": rendimientos_validos[rend_secundario] = true
-					
-			var lista_candidatos = []
-			var lista_genericos = []
-			
-			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
-				var d = Constantes.DATOS_EDIFICIOS[edif_nombre]
-				if edif_nombre in ["Palace", "Town Hall"]: continue
-				
-				var is_wonder = d.get("is_wonder", false)
-				var is_generic = d.get("is_generic", false)
-				var es_muralla = ReglasJuego.es_edificio_muralla(edif_nombre)
-				
-				if is_generic:
-					var era_edif = d.get("era", "All")
-					if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
-					if d.has("civ") and d.civ != civ_actual and d.civ != civ_sincretismo: continue
-					if is_wonder and not maravillas_validas: continue
-					lista_genericos.append({"nombre": edif_nombre, "ady": 0, "d": d, "wonder": is_wonder, "generic": true})
-				else:
-					var era_edif = d.get("era", "All")
-					if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
-					if d.has("civ") and d.civ != civ_actual and d.civ != civ_sincretismo: continue
-					if edificios_construidos.has(edif_nombre) and not is_wonder and not es_muralla: continue
-					if edif_nombre in datos_c.edificios: continue
-					
-					if not ReglasJuego.es_ubicacion_valida_para_edificio(celda_seleccionada, edif_nombre, asent_centro, era_actual, civ_actual, city_grid, asent_tipo, asentamientos): continue
-					if datos_c.terreno == "NATURAL_WONDER" or datos_c.get("caracteristica", "") == "NATURAL_WONDER": continue
-				
-					if not es_muralla:
-						var reg_count = 0
-						var is_full_tile = d.get("full_tile", false) or edif_nombre in ["Aerodrome", "Rail Station"]
-						for e in datos_c.edificios:
-							if not ReglasJuego.es_edificio_muralla(e) and not ReglasJuego.es_edificio_obsoleto(e, celda_seleccionada, era_actual, city_grid): reg_count += 1
-						if reg_count >= 2 and not is_full_tile: continue
-						
-				var ady = 0 if is_generic else ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif_nombre, era_actual, city_grid)
-				lista_candidatos.append({"nombre": edif_nombre, "ady": ady, "d": d, "wonder": is_wonder, "generic": is_generic})
+				var ady = ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif_nombre, era_actual, city_grid)
+				lista_candidatos.append({"nombre": edif_nombre, "ady": ady, "d": d, "wonder": is_wonder})
 				
 			lista_candidatos.sort_custom(func(a, b): return a.ady > b.ady)
 			
@@ -1596,15 +1549,7 @@ func actualizar_panel_construccion():
 			grid_mar_c.add_theme_constant_override("h_separation", 6)
 			grid_mar_c.add_theme_constant_override("v_separation", 6)
 
-			for gen in lista_genericos:
-				if gen.wonder:
-					var color_borde = Constantes.obtener_color_rendimiento(gen.d.get("rendimiento", ""))
-					var tt = obtener_tooltip_edificio(gen.nombre, 0)
-					var btn_vb = crear_boton_icono(gen.nombre, "SQUARE", color_borde, tt, gen.nombre, "CONSTRUCCION", false, false)
-					grid_mar_c.add_child(btn_vb)
-
 			for cand in lista_candidatos:
-				if cand.generic: continue
 				var color_borde = Constantes.obtener_color_rendimiento(cand.d.get("rendimiento", ""))
 				var tt = obtener_tooltip_edificio(cand.nombre, cand.ady)
 				
@@ -1613,13 +1558,6 @@ func actualizar_panel_construccion():
 					grid_mar_c.add_child(btn_vb)
 				else:
 					var btn_vb = crear_boton_icono(cand.nombre, "CIRCLE", color_borde, tt, cand.nombre, "CONSTRUCCION", false)
-					grid_edif_c.add_child(btn_vb)
-
-			for gen in lista_genericos:
-				if not gen.wonder:
-					var color_borde = Constantes.obtener_color_rendimiento(gen.d.get("rendimiento", ""))
-					var tt = obtener_tooltip_edificio(gen.nombre, 0)
-					var btn_vb = crear_boton_icono(gen.nombre, "CIRCLE", color_borde, tt, gen.nombre, "CONSTRUCCION", false, false)
 					grid_edif_c.add_child(btn_vb)
 
 			if grid_edif_c.get_child_count() > 0:
@@ -1767,8 +1705,7 @@ func actualizar_panel_externos():
 		for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
 			var d_edif = Constantes.DATOS_EDIFICIOS[edif_nombre]
 			if edif_nombre in ["Palace", "Town Hall"]: continue
-			if d_edif.get("is_generic", false): continue
-			
+						
 			var era_edif = d_edif.get("era", "All")
 			if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
 			
@@ -2033,7 +1970,7 @@ func actualizar_panel_ui():
 				var datos_edif = Constantes.DATOS_EDIFICIOS[edif]
 				var rend = datos_edif.get("rendimiento", "")
 				var base = datos_edif.get("base", 0)
-				var ady = ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif, era_actual, city_grid) if not datos_edif.get("is_generic", false) else 0
+				var ady = ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif, era_actual, city_grid)
 				
 				var is_unique = datos_edif.has("civ")
 				if "building_mountain_adj" in l_bonos_lista:
@@ -2214,7 +2151,7 @@ func actualizar_panel_ui():
 			
 		var asset_name = edif
 		if ReglasJuego.es_edificio_muralla(edif): asset_name = edif
-		elif edif == "Marvel" or Constantes.DATOS_EDIFICIOS.get(edif, {}).get("is_wonder", false):
+		elif Constantes.DATOS_EDIFICIOS.get(edif, {}).get("is_wonder", false):
 			asset_name = "wonder" if not ResourceLoader.exists(resolver_ruta_asset(asset_name)) else edif
 		
 		var tex_path = resolver_ruta_asset(asset_name)
@@ -2268,7 +2205,7 @@ func actualizar_panel_ui():
 			elif not ReglasJuego.es_edificio_muralla(edif):
 				var d_e = Constantes.DATOS_EDIFICIOS.get(edif, {})
 				var b_base = d_e.get("base", 0)
-				var b_ady = ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif, era_actual, city_grid) if not d_e.get("is_generic", false) else 0
+				var b_ady = ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif, era_actual, city_grid)
 				var total_e = b_base + b_ady
 				if total_e > 0:
 					e_yields[d_e.get("rendimiento", "")] = total_e
@@ -2511,7 +2448,7 @@ func actualizar_panel_recuento_mejoras():
 				var d_e = Constantes.DATOS_EDIFICIOS[edif]
 				var rend = d_e.get("rendimiento", "")
 				var base = d_e.get("base", 0)
-				var ady = ReglasJuego.calcular_bono_edificio(coord, edif, era_actual, city_grid) if not d_e.get("is_generic", false) else 0
+				var ady = ReglasJuego.calcular_bono_edificio(coord, edif, era_actual, city_grid)
 				if total_yields.has(rend): total_yields[rend] += base + ady
 			elif Constantes.MARAVILLAS_NATURALES.has(edif):
 				var w_yields = Constantes.MARAVILLAS_NATURALES[edif].get("yields", {})
@@ -3001,12 +2938,8 @@ func crear_boton_icono(item_name: String, forma: String, color_borde: Color, too
 	var tex_path = resolver_ruta_asset(item_name)
 	if item_name == "Palace": tex_path = "res://assets/palace.png"
 	elif item_name == "Town Hall": tex_path = "res://assets/city_hall.png"
-	elif item_name == "Marvel" or item_name.begins_with("Generic_"): tex_path = "res://assets/wonder.png"
-	
-	if item_name.begins_with("Generic_"):
-		var rend_sub = item_name.trim_prefix("Generic_")
-		tex_path = resolver_ruta_asset(obtener_nombre_asset_rendimiento(rend_sub))
 		
+			
 	if ResourceLoader.exists(tex_path):
 		var tex = load(tex_path)
 		btn.icon = tex
@@ -3014,7 +2947,6 @@ func crear_boton_icono(item_name: String, forma: String, color_borde: Color, too
 		btn.expand_icon = true
 	else:
 		var txt_label = item_name
-		if item_name.begins_with("Generic_"): txt_label = item_name.trim_prefix("Generic_")
 		btn.text = txt_label.substr(0, 5)
 		btn.add_theme_font_size_override("font_size", 14)
 		btn.add_theme_color_override("font_color", Color.WHITE)
@@ -3024,7 +2956,6 @@ func crear_boton_icono(item_name: String, forma: String, color_borde: Color, too
 	var lbl = Label.new()
 	if mostrar_texto:
 		var display_name = item_name
-		if item_name.begins_with("Generic_"): display_name = item_name.trim_prefix("Generic_")
 		var trunc_name = display_name.capitalize() if display_name.length() <= 12 else display_name.substr(0, 10) + ".."
 		lbl.text = trunc_name
 	else: lbl.text = ""
@@ -3295,7 +3226,7 @@ func actualizar_icono_celda(coord: Vector2i):
 				var es_maravilla_natural = Constantes.MARAVILLAS_NATURALES.has(edif)
 				
 				if edif == "Palace" or edif == "Town Hall": asset_name = "palace" if edif == "Palace" else "city_hall"
-				elif edif == "Marvel" or (es_maravilla and not ResourceLoader.exists(resolver_ruta_asset(asset_name))): asset_name = "wonder"
+				elif es_maravilla and not ResourceLoader.exists(resolver_ruta_asset(asset_name)): asset_name = "wonder"
 					
 				if es_maravilla_natural:
 					var path = resolver_ruta_asset(asset_name)
@@ -4291,7 +4222,7 @@ class ReglasJuego:
 			
 				var is_wonder = false
 				for e in vd.edificios:
-					if e == "Marvel" or Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false): is_wonder = true
+					if Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false): is_wonder = true
 				if is_wonder: bonus += 1
 			
 				if rend == "Culture" or rend == "Happiness":
@@ -4593,46 +4524,6 @@ class GestorConstruccion:
 		var era = main.era_actual
 		var civ = main.civ_actual
 	
-		var edificios_construidos = {}
-		for c in main.city_grid.values():
-			for e in c.edificios:
-				if not ReglasJuego.es_edificio_obsoleto(e, c.q * Vector2i.RIGHT + c.r * Vector2i.DOWN, era, main.city_grid):
-					edificios_construidos[e] = true
-				
-		var rendimiento_tiene_edificios_disponibles = func(r_tipo: String) -> bool:
-			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
-				var d = Constantes.DATOS_EDIFICIOS[edif_nombre]
-				if d.get("is_generic", false) and d.get("rendimiento", "") == r_tipo:
-					var era_edif = d.get("era", "All")
-					if era_edif == "All" or Constantes.ORDEN_ERAS.get(era_edif, 0) <= Constantes.ORDEN_ERAS.get(era, 0):
-						return true
-					
-			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
-				var d = Constantes.DATOS_EDIFICIOS[edif_nombre]
-				if d.get("is_wonder", false) or d.get("is_generic", false): continue
-				if edif_nombre in ["Palace", "Town Hall"]: continue
-			
-				var rend = d.get("rendimiento", "")
-				var rend_sec = d.get("rendimiento_secundario", "")
-				if rend == r_tipo or rend_sec == r_tipo:
-					var era_edif = d.get("era", "All")
-					if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era, 0): continue
-					if d.has("civ") and d.civ != civ and d.civ != main.civ_sincretismo: continue
-					if edificios_construidos.has(edif_nombre): continue
-					return true
-				
-			return false
-
-		var maravillas_construidas = {}
-		for c in main.city_grid.values():
-			for e in c.edificios:
-				var d_e = Constantes.DATOS_EDIFICIOS.get(e, {})
-				if d_e.get("is_wonder", false):
-					maravillas_construidas[e] = true
-				
-		var top_por_rend = {
-			"Food": [], "Production": [], "Gold": [], "Science": [], "Culture": [], "Happiness": [], "Influence": []
-		}
 		var top_warehouses = []
 	
 		for coord in main.city_grid.keys():
@@ -4646,10 +4537,9 @@ class GestorConstruccion:
 		
 			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
 				var d_edif = Constantes.DATOS_EDIFICIOS[edif_nombre]
-				var is_generic = d_edif.get("is_generic", false)
 				var is_warehouse = d_edif.get("tipo", "") == "Warehouse"
 			
-				if not is_generic and not is_warehouse: continue
+				if not is_warehouse: continue
 			
 				var era_edif = d_edif.get("era", "All")
 				if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era, 0): continue
@@ -4658,74 +4548,20 @@ class GestorConstruccion:
 				var ady = ReglasJuego.calcular_bono_edificio(coord, edif_nombre, era, main.city_grid)
 				var total = d_edif.get("base", 0) + ady
 			
-				if is_warehouse:
-					top_warehouses.append({"coord": coord, "score": total + ady, "edificio": edif_nombre})
-				elif is_generic:
-					var rend = d_edif.get("rendimiento", "")
-					if top_por_rend.has(rend) and rendimiento_tiene_edificios_disponibles.call(rend):
-						top_por_rend[rend].append({"coord": coord, "score": total, "edificio": edif_nombre})
+				top_warehouses.append({"coord": coord, "score": total + ady, "edificio": edif_nombre})
 					
-		var celdas_optimas_rendimiento = {}
-		for r_key in top_por_rend.keys():
-			var arr = top_por_rend[r_key]
-			arr.sort_custom(func(a, b): return a.score > b.score)
-			var limit = min(3, arr.size())
-			for i in range(limit):
-				if arr[i].score > 0:
-					var c = arr[i].coord
-					celdas_optimas_rendimiento[c] = true
-					if not sugerencias.has(c): sugerencias[c] = []
-					sugerencias[c].append({"edificio": arr[i].edificio})
-				
 		top_warehouses.sort_custom(func(a, b): return a.score > b.score)
 		var count_w = 0
 		for w in top_warehouses:
-			if not celdas_optimas_rendimiento.has(w.coord):
-				if not sugerencias.has(w.coord): sugerencias[w.coord] = []
-				var existe = false
-				for s in sugerencias[w.coord]:
-					if s.edificio == w.edificio: existe = true
-				if not existe:
-					sugerencias[w.coord].append({"edificio": w.edificio})
-					count_w += 1
-				if count_w >= 3: break
+			if not sugerencias.has(w.coord): sugerencias[w.coord] = []
+			var existe = false
+			for s in sugerencias[w.coord]:
+				if s.edificio == w.edificio: existe = true
+			if not existe:
+				sugerencias[w.coord].append({"edificio": w.edificio})
+				count_w += 1
+			if count_w >= 3: break
 			
-		var maravillas_candidatas = []
-		for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
-			var d_edif = Constantes.DATOS_EDIFICIOS[edif_nombre]
-			if not d_edif.get("is_wonder", false) or d_edif.get("is_generic", false): continue 
-			if maravillas_construidas.has(edif_nombre): continue
-		
-			var era_edif = d_edif.get("era", "All")
-			if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era, 0): continue
-			if d_edif.has("civ") and d_edif.civ != civ and d_edif.civ != main.civ_sincretismo: continue
-		
-			maravillas_candidatas.append(edif_nombre)
-		
-		for coord_optima in celdas_optimas_rendimiento.keys():
-			for vec in HexMath.VECINOS_HEX:
-				var n = coord_optima + vec
-			
-				if celdas_optimas_rendimiento.has(n): continue 
-			
-				var dist = HexMath.dist_hex(n, asent_centro)
-				if dist < 1 or dist > 3: continue
-				if not main.city_grid.has(n): continue
-			
-				var datos_n = main.city_grid[n]
-				if datos_n.get("ajeno", false): continue
-				if datos_n.edificios.size() > 0 or datos_n.mejora_tipo != "": continue
-				if datos_n.get("caracteristica", "") == "NATURAL_WONDER" or datos_n.terreno == "NATURAL_WONDER": continue
-			
-				for mar_nombre in maravillas_candidatas:
-					if ReglasJuego.es_ubicacion_valida_para_edificio(n, mar_nombre, asent_centro, era, civ, main.city_grid, asent_tipo, main.asentamientos):
-						if not sugerencias.has(n): sugerencias[n] = []
-						var existe = false
-						for s in sugerencias[n]:
-							if s.edificio == mar_nombre: existe = true
-						if not existe:
-							sugerencias[n].append({"edificio": mar_nombre})
-						
 		return sugerencias
 
 	static func aplicar_edificio(main: Node2D, edificio: String):
@@ -5841,17 +5677,7 @@ class GestorInterfaz:
 		vbox_const_scroll.add_theme_constant_override("separation", 16)
 		scroll_const.add_child(vbox_const_scroll)
 
-		var lbl_header_genericos = Label.new()
-		lbl_header_genericos.text = "⬘ GENERIC MARKERS ⬘"
-		lbl_header_genericos.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		lbl_header_genericos.add_theme_font_size_override("font_size", 14)
-		lbl_header_genericos.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
-		vbox_const_scroll.add_child(lbl_header_genericos)
 	
-		var grid_genericos = GridContainer.new()
-		grid_genericos.columns = 5; grid_genericos.add_theme_constant_override("h_separation", 14); grid_genericos.add_theme_constant_override("v_separation", 10)
-		grid_genericos.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		vbox_const_scroll.add_child(grid_genericos)
 
 		var lbl_header_mejoras = Label.new()
 		lbl_header_mejoras.text = "⬘ IMPROVEMENTS ⬘"
@@ -6192,8 +6018,6 @@ class GestorInterfaz:
 			"grid_terrenos": grid_terrenos,
 			"grid_carac": grid_carac,
 			"grid_recursos": grid_recursos,
-			"grid_genericos": grid_genericos,
-			"lbl_header_genericos": lbl_header_genericos,
 			"grid_mejoras": grid_mejoras,
 			"lbl_header_mejoras": lbl_header_mejoras,
 			"grid_edificios": grid_edificios,
