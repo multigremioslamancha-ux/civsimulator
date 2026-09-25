@@ -7,7 +7,7 @@ class_name Constantes
 # Contiene TODOS los datos del juego: eras, civilizaciones, biomas, terrenos,
 # características, recursos, edificios, mejoras, maravillas naturales y líderes.
 # NO contiene lógica de juego ni estado de partida: es consumido de forma estática
-# por Main.gd (por ejemplo: Constantes.DATOS_EDIFICIOS, Constantes.RECURSOS_POR_ERA).
+# por Main.gd (por ejemplo: Constantes.DATOS_EDIFICIOS, Constantes.DATOS_RECURSOS).
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -55,66 +55,75 @@ const ICONOS_TERRENO = {
 # ------------------------------------------------------------------------------
 # RECURSOS
 # ------------------------------------------------------------------------------
-const RENDIMIENTOS_RECURSOS = {
-	"Camels": "Gold", "Clay": "Production", "Cotton": "Gold", "Cowrie": "Happiness", 
-	"Crabs": "Food", "Dates": "Food", "Dyes": "Culture", "Fish": "Food", 
-	"Flax": "Science", "Gold": "Gold", "Gypsum": "Science", "Hardwood": "Culture", 
-	"Hides": "Production", "Horses": "Production", "Incense": "Culture", "Iron": "Production", 
-	"Ivory": "Culture", "Jade": "Culture", "Kaolin": "Production", "Limestone": "Production", 
-	"Llamas": "Happiness", "Mangoes": "Culture", "Marble": "Culture", "Pearls": "Gold", 
-	"Rice": "Food", "Rubies": "Gold", "Salt": "Food", "Silk": "Culture", 
-	"Silver": "Gold", "Tin": "Production", "Turtles": "Culture", "Wild Game": "Food", 
-	"Wine": "Happiness", "Wool": "Production",
-	"Cloves": "Gold", "Cocoa": "Happiness", "Furs": "Happiness", "Niter": "Production", 
-	"Pitch": "Production", "Spices": "Culture", "Sugar": "Gold", "Tea": "Culture", 
-	"Truffles": "Happiness", "Whales": "Food",
-	"Citrus": "Food", "Coal": "Production", "Coffee": "Gold", "Nickel": "Production", 
-	"Oil": "Production", "Quinine": "Science", "Rubber": "Production", "Tobacco": "Culture"
-}
-
-const RECURSOS_POR_ERA = {
-	"Antiquity": {
-		"Camels": ["DESERT", "PLAINS"], "Clay": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Cotton": ["DESERT", "PLAINS", "GRASSLAND"], 
-		"Cowrie": ["MARINE"], "Crabs": ["MARINE"], "Dates": ["DESERT"], "Dyes": ["MARINE"], "Fish": ["MARINE"],
-		"Flax": ["PLAINS", "GRASSLAND"], "Gold": ["PLAINS", "GRASSLAND", "TROPICAL"], "Gypsum": ["PLAINS", "TUNDRA"], 
-		"Hardwood": ["TUNDRA", "TROPICAL"], "Hides": ["TUNDRA"], "Horses": ["PLAINS", "GRASSLAND"], 
-		"Incense": ["DESERT", "PLAINS"], "Iron": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Ivory": ["DESERT", "PLAINS", "GRASSLAND", "TROPICAL"], 
-		"Jade": ["PLAINS", "TUNDRA", "TROPICAL"], "Kaolin": ["PLAINS", "GRASSLAND", "TROPICAL"], 
-		"Lapis Lazuli": ["DESERT", "PLAINS"], "Limestone": ["DESERT", "PLAINS", "GRASSLAND"], "Llamas": ["TROPICAL"], 
-		"Mangoes": ["TROPICAL"], "Marble": ["PLAINS", "GRASSLAND"], "Pearls": ["MARINE"], "Rice": ["PLAINS", "GRASSLAND", "TROPICAL"], 
-		"Rubies": ["DESERT", "PLAINS", "TROPICAL"], "Salt": ["DESERT", "PLAINS", "TUNDRA"], "Silk": ["PLAINS", "GRASSLAND", "TROPICAL"], 
-		"Silver": ["DESERT", "TUNDRA"], "Tin": ["PLAINS", "TROPICAL"], "Turtles": ["MARINE"], 
-		"Wild Game": ["GRASSLAND", "TUNDRA", "TROPICAL"], "Wine": ["PLAINS", "GRASSLAND"], "Wool": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"]
-	},
-	"Exploration": {
-		"Camels": ["DESERT", "PLAINS"], "Clay": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Cloves": ["TROPICAL", "MARINE"], "Cocoa": ["TROPICAL"],
-		"Cotton": ["DESERT", "PLAINS", "GRASSLAND"], "Cowrie": ["MARINE"], "Crabs": ["MARINE"], "Dates": ["DESERT"],
-		"Dyes": ["MARINE"], "Fish": ["MARINE"], "Flax": ["PLAINS", "GRASSLAND"], "Furs": ["PLAINS", "TUNDRA"],
-		"Gold": ["PLAINS", "GRASSLAND", "TROPICAL"], "Gypsum": ["PLAINS", "TUNDRA"], "Hardwood": ["TUNDRA", "TROPICAL"],
-		"Horses": ["PLAINS", "GRASSLAND"], "Incense": ["DESERT", "PLAINS"], "Iron": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"],
-		"Ivory": ["DESERT", "PLAINS", "GRASSLAND", "TROPICAL"], "Jade": ["PLAINS", "TUNDRA", "TROPICAL"], 
-		"Kaolin": ["PLAINS", "GRASSLAND", "TROPICAL"], "Limestone": ["DESERT", "PLAINS", "GRASSLAND"], 
-		"Llamas": ["TROPICAL"], "Mangoes": ["TROPICAL"], "Marble": ["PLAINS", "GRASSLAND"], "Niter": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"],
-		"Pearls": ["MARINE"], "Pitch": ["PLAINS", "GRASSLAND", "TROPICAL"], "Rice": ["PLAINS", "GRASSLAND", "TROPICAL"], 
-		"Rubies": ["DESERT", "PLAINS", "TROPICAL"], "Silk": ["PLAINS", "GRASSLAND", "TROPICAL"], "Silver": ["DESERT", "TUNDRA"], 
-		"Spices": ["GRASSLAND", "TROPICAL"], "Sugar": ["PLAINS", "GRASSLAND", "TROPICAL"], "Tea": ["PLAINS", "GRASSLAND"], 
-		"Tin": ["PLAINS", "TROPICAL"], "Truffles": ["PLAINS", "GRASSLAND", "TUNDRA"], "Turtles": ["MARINE"], 
-		"Whales": ["MARINE"], "Wild Game": ["GRASSLAND", "TUNDRA", "TROPICAL"], "Wine": ["PLAINS", "GRASSLAND"]
-	},
-	"Modern Age": {
-		"Citrus": ["PLAINS", "GRASSLAND"], "Coal": ["DESERT", "PLAINS", "GRASSLAND", "TROPICAL"], 
-		"Cocoa": ["TROPICAL"], "Coffee": ["PLAINS", "TROPICAL"], "Cotton": ["DESERT", "PLAINS", "GRASSLAND"], 
-		"Cowrie": ["MARINE"], "Crabs": ["MARINE"], "Fish": ["MARINE"], "Furs": ["PLAINS", "TUNDRA"],
-		"Gold": ["PLAINS", "GRASSLAND", "TROPICAL"], "Hardwood": ["TUNDRA", "TROPICAL"], "Horses": ["PLAINS", "GRASSLAND"], 
-		"Ivory": ["DESERT", "PLAINS", "GRASSLAND", "TROPICAL"], "Kaolin": ["PLAINS", "GRASSLAND", "TROPICAL"], 
-		"Limestone": ["DESERT", "PLAINS", "GRASSLAND"], "Llamas": ["TROPICAL"], "Marble": ["PLAINS", "GRASSLAND"],
-		"Nickel": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Niter": ["DESERT", "PLAINS", "GRASSLAND", "TUNDRA", "TROPICAL"], "Oil": ["DESERT", "GRASSLAND", "TUNDRA"], "Pearls": ["MARINE"], 
-		"Pitch": ["PLAINS", "GRASSLAND", "TROPICAL"], "Quinine": ["PLAINS", "GRASSLAND"], "Rice": ["PLAINS", "GRASSLAND", "TROPICAL"], 
-		"Rubber": ["GRASSLAND", "TROPICAL"], "Silk": ["PLAINS", "GRASSLAND", "TROPICAL"], "Silver": ["DESERT", "TUNDRA"], 
-		"Spices": ["GRASSLAND", "TROPICAL"], "Sugar": ["PLAINS", "GRASSLAND", "TROPICAL"], "Tea": ["PLAINS", "GRASSLAND"], 
-		"Tin": ["PLAINS", "TROPICAL"], "Tobacco": ["PLAINS", "GRASSLAND"], "Truffles": ["PLAINS", "GRASSLAND", "TUNDRA"], 
-		"Whales": ["MARINE"], "Wine": ["PLAINS", "GRASSLAND"]
-	}
+# DATOS_RECURSOS: única fuente de verdad de los recursos. La clave es el nombre
+# del recurso y el valor un diccionario con todos sus atributos:
+#   - rendimiento      : {"tipo": <rendimiento>, "cantidad": <int>}. Si un
+#                        recurso da varios rendimientos (p. ej. Pitch) el valor
+#                        es un ARRAY de diccionarios con esa misma forma.
+#   - mejora           : improvement asociada (Camp, Mine, Plantation...).
+#   - eras             : eras en las que el recurso aparece.
+#   - terrenos_validos : terrenos donde puede ubicarse. Entradas admitidas:
+#                        "Flat X"/"Rough X" (terreno+bioma), un bioma simple
+#                        ("Grassland"...) que implica Flat/Rough sin feature,
+#                        "Flat"/"Rough", o "Coastal"/"Lake"/"Ocean"/
+#                        "Navigable River".
+#   - features_validas : features de la celda (con su denominación canónica:
+#                        "Marsh", "Forest", "Desert Floodplain"...) donde puede
+#                        ubicarse. La entrada especial "Floodplains" acepta
+#                        cualquier floodplain.
+# Consumido por Main.gd: botones de recursos, validación de celda, compatibilidad
+# con mejoras y rendimientos de celda.
+const DATOS_RECURSOS = {
+	"Camels": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Camp", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Flat Desert", "Rough Desert", "Flat Plains", "Rough Plains"], "features_validas": []},
+	"Clay": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Clay Pit", "eras": ["Antiquity", "Exploration"], "terrenos_validos": [], "features_validas": ["Tundra Bog", "Marsh", "Watering Hole", "Mangrove", "Oasis"]},
+	"Cotton": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Plantation", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Flat Grassland"], "features_validas": ["Desert Floodplain", "Grassland Floodplain", "Plains Floodplain"]},
+	"Cowrie": {"rendimiento": {"tipo": "Happiness", "cantidad": 1}, "mejora": "Fishing Boat", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Coastal"], "features_validas": []},
+	"Crabs": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Fishing Boat", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Coastal", "Lake", "Navigable River"], "features_validas": []},
+	"Dates": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Plantation", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Flat Desert"], "features_validas": ["Oasis"]},
+	"Dyes": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Fishing Boat", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Coastal"], "features_validas": []},
+	"Fish": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Fishing Boat", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Coastal", "Ocean"], "features_validas": []},
+	"Flax": {"rendimiento": {"tipo": "Science", "cantidad": 1}, "mejora": "Plantation", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Grassland", "Plains"], "features_validas": ["Forest", "Savanna Woodland"]},
+	"Gold": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Mine", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Rough Grassland", "Rough Plains", "Rough Tropical"], "features_validas": []},
+	"Gypsum": {"rendimiento": {"tipo": "Science", "cantidad": 1}, "mejora": "Quarry", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Flat Plains", "Rough Plains", "Rough Tundra"], "features_validas": []},
+	"Hardwood": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Woodcutter", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Tundra", "Tropical"], "features_validas": ["Tundra Bog", "Mangrove"]},
+	"Hides": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Camp", "eras": ["Antiquity"], "terrenos_validos": ["Flat Grassland", "Flat Plains", "Flat Tundra"], "features_validas": ["Taiga", "Tundra Bog", "Tundra Floodplain"]},
+	"Horses": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Pasture", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Flat Grassland", "Flat Plains"], "features_validas": []},
+	"Incense": {"rendimiento": {"tipo": "Science", "cantidad": 1}, "mejora": "Plantation", "eras": ["Antiquity", "Exploration"], "terrenos_validos": [], "features_validas": ["Sagebrush Steppe", "Savanna Woodland"]},
+	"Iron": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Mine", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Rough"], "features_validas": []},
+	"Ivory": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Camp", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Flat Desert", "Flat Plains", "Rough Plains", "Flat Tropical"], "features_validas": ["Sagebrush Steppe", "Forest", "Watering Hole", "Rainforest"]},
+	"Jade": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Quarry", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Flat Plains", "Flat Tropical", "Flat Tundra"], "features_validas": []},
+	"Kaolin": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Quarry", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": [], "features_validas": ["Marsh", "Watering Hole", "Mangrove"]},
+	"Limestone": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Quarry", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Grassland", "Plains", "Desert"], "features_validas": ["Oasis"]},
+	"Llamas": {"rendimiento": {"tipo": "Happiness", "cantidad": 1}, "mejora": "Pasture", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Tropical"], "features_validas": ["Rainforest"]},
+	"Mangoes": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Plantation", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Tropical"], "features_validas": ["Rainforest"]},
+	"Marble": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Quarry", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Flat Grassland", "Rough Grassland", "Rough Plains"], "features_validas": []},
+	"Pearls": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Fishing Boat", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Coastal"], "features_validas": []},
+	"Rice": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Plantation", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": [], "features_validas": ["Marsh", "Watering Hole", "Mangrove"]},
+	"Rubies": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Mine", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Plains", "Tropical", "Desert"], "features_validas": []},
+	"Salt": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Mine", "eras": ["Antiquity"], "terrenos_validos": ["Flat Desert", "Flat Plains", "Flat Tundra"], "features_validas": []},
+	"Silk": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Plantation", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Flat Plains"], "features_validas": ["Grassland Floodplain", "Plains Floodplain", "Tropical Floodplain"]},
+	"Silver": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Mine", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Rough Desert", "Rough Tundra"], "features_validas": []},
+	"Tin": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Mine", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Tropical", "Plains"], "features_validas": []},
+	"Turtles": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Fishing Boat", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Coastal"], "features_validas": []},
+	"Wild Game": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Camp", "eras": ["Antiquity", "Exploration"], "terrenos_validos": ["Tropical", "Grassland", "Tundra"], "features_validas": ["Rainforest", "Tundra Bog", "Marsh"]},
+	"Wine": {"rendimiento": {"tipo": "Happiness", "cantidad": 1}, "mejora": "Plantation", "eras": ["Antiquity", "Exploration", "Modern Age"], "terrenos_validos": ["Flat Grassland", "Flat Plains"], "features_validas": []},
+	"Wool": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Pasture", "eras": ["Antiquity"], "terrenos_validos": ["Rough"], "features_validas": []},
+	"Cocoa": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Woodcutter", "eras": ["Exploration", "Modern Age"], "terrenos_validos": [], "features_validas": ["Rainforest"]},
+	"Furs": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Camp", "eras": ["Exploration", "Modern Age"], "terrenos_validos": ["Flat Tundra"], "features_validas": ["Savanna Woodland", "Taiga", "Tundra Floodplain"]},
+	"Niter": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Mine", "eras": ["Exploration", "Modern Age"], "terrenos_validos": ["Flat"], "features_validas": ["Floodplains"]},
+	"Pitch": {"rendimiento": [{"tipo": "Production", "cantidad": 1}, {"tipo": "Gold", "cantidad": 1}], "mejora": "Woodcutter", "eras": ["Exploration", "Modern Age"], "terrenos_validos": ["Grassland", "Plains", "Tundra"], "features_validas": []},
+	"Spices": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Woodcutter", "eras": ["Exploration", "Modern Age"], "terrenos_validos": [], "features_validas": ["Forest", "Rainforest"]},
+	"Sugar": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Plantation", "eras": ["Exploration", "Modern Age"], "terrenos_validos": ["Flat Tropical"], "features_validas": ["Grassland Floodplain", "Plains Floodplain", "Tropical Floodplain"]},
+	"Tea": {"rendimiento": {"tipo": "Science", "cantidad": 1}, "mejora": "Plantation", "eras": ["Exploration", "Modern Age"], "terrenos_validos": ["Flat Grassland", "Rough Grassland", "Flat Plains"], "features_validas": []},
+	"Truffles": {"rendimiento": {"tipo": "Culture", "cantidad": 1}, "mejora": "Camp", "eras": ["Exploration", "Modern Age"], "terrenos_validos": ["Flat Grassland", "Rough Grassland"], "features_validas": ["Marsh", "Watering Hole", "Tundra Bog"]},
+	"Whales": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Fishing Boat", "eras": ["Exploration", "Modern Age"], "terrenos_validos": ["Coastal", "Ocean"], "features_validas": []},
+	"Citrus": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Plantation", "eras": ["Modern Age"], "terrenos_validos": ["Flat Grassland", "Flat Plains"], "features_validas": []},
+	"Coal": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Mine", "eras": ["Modern Age"], "terrenos_validos": ["Flat Desert", "Rough Grassland", "Rough Plains"], "features_validas": ["Forest", "Savanna Woodland", "Taiga"]},
+	"Coffee": {"rendimiento": {"tipo": "Science", "cantidad": 1}, "mejora": "Plantation", "eras": ["Modern Age"], "terrenos_validos": ["Rough Plains", "Flat Tropical", "Rough Tropical"], "features_validas": ["Mangrove", "Rainforest", "Tropical Floodplain"]},
+	"Oil": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Oil Rig", "eras": ["Modern Age"], "terrenos_validos": ["Flat Desert", "Flat Tundra"], "features_validas": ["Desert Floodplain", "Oasis", "Sagebrush Steppe", "Marsh", "Taiga", "Tundra Bog", "Tundra Floodplain"]},
+	"Quinine": {"rendimiento": {"tipo": "Food", "cantidad": 1}, "mejora": "Woodcutter", "eras": ["Modern Age"], "terrenos_validos": [], "features_validas": ["Forest", "Savanna Woodland"]},
+	"Rubber": {"rendimiento": {"tipo": "Production", "cantidad": 1}, "mejora": "Woodcutter", "eras": ["Modern Age"], "terrenos_validos": [], "features_validas": ["Forest", "Rainforest"]},
+	"Tobacco": {"rendimiento": {"tipo": "Gold", "cantidad": 1}, "mejora": "Plantation", "eras": ["Modern Age"], "terrenos_validos": ["Flat Grassland", "Flat Plains"], "features_validas": ["Forest", "Savanna Woodland"]}
 }
 
 # ------------------------------------------------------------------------------

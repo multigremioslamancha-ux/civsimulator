@@ -274,42 +274,8 @@ func mostrar_dialogo_guardar_como():
 	GestorInterfaz.abrir_modal(self, dialog, null, false, Vector2(320, 160))
 
 func es_mejora_compatible_con_recurso(mej_nombre: String, recurso: String, era: String) -> bool:
-	var rec_lower = recurso.strip_edges().to_lower()
-	match era:
-		"Antiquity":
-			match mej_nombre:
-				"Quarry": return rec_lower in ["gypsum", "jade", "kaolin", "marble", "limestone"]
-				"Clay Pit": return rec_lower in ["clay"]
-				"Woodcutter": return rec_lower in ["hardwood"]
-				"Fishing Boat": return rec_lower in ["cowrie", "crabs", "dyes", "fish", "pearls", "turtles"]
-				"Mine": return rec_lower in ["gold", "iron", "rubies", "salt", "silver", "tin"]
-				"Camp": return rec_lower in ["ivory", "camels", "hides", "wild game"]
-				"Pasture": return rec_lower in ["horses", "llamas", "wool"]
-				"Plantation": return rec_lower in ["cotton", "dates", "flax", "incense", "mangoes", "rice", "silk", "wine"]
-				_: return false
-		"Exploration":
-			match mej_nombre:
-				"Clay Pit": return rec_lower in ["clay"]
-				"Woodcutter": return rec_lower in ["cocoa", "hardwood", "spices"]
-				"Fishing Boat": return rec_lower in ["cowrie", "crabs", "dyes", "fish", "pearls", "turtles", "whales"]
-				"Mine": return rec_lower in ["gold", "iron", "rubies", "silver", "niter", "tin"]
-				"Camp": return rec_lower in ["camels", "furs", "ivory", "truffles", "wild game"]
-				"Pasture": return rec_lower in ["horses", "llamas"]
-				"Plantation": return rec_lower in ["cotton", "dates", "flax", "incense", "mangoes", "rice", "silk", "sugar", "tea", "wine"]
-				"Quarry": return rec_lower in ["gypsum", "jade", "kaolin", "limestone", "marble"]
-				_: return false
-		"Modern Age":
-			match mej_nombre:
-				"Woodcutter": return rec_lower in ["cocoa", "hardwood", "quinine", "rubber", "spices"]
-				"Fishing Boat": return rec_lower in ["cowrie", "crabs", "fish", "pearls", "whales"]
-				"Mine": return rec_lower in ["coal", "gold", "iron", "niter", "silver", "tin"]
-				"Camp": return rec_lower in ["furs", "ivory", "truffles"]
-				"Oil Rig": return rec_lower in ["oil"]
-				"Pasture": return rec_lower in ["horses", "llamas"]
-				"Plantation": return rec_lower in ["citrus", "coffee", "cotton", "rice", "silk", "sugar", "tea", "tobacco", "wine"]
-				"Quarry": return rec_lower in ["jade", "kaolin", "limestone", "marble"]
-				_: return false
-	return false
+	# Toda la información del recurso (mejora + eras) vive en DATOS_RECURSOS.
+	return ReglasJuego.recurso_compatible_con_mejora(recurso, mej_nombre, era)
 
 func _es_celda_urbana(coord: Vector2i) -> bool:
 	if not city_grid.has(coord): return false
@@ -744,11 +710,12 @@ func actualizar_botones_recursos_ui():
 
 	var asent_centro = asentamientos[asentamiento_activo_idx].centro
 	var es_centro = (celda_seleccionada == asent_centro or datos_celda.edificios.has("Palace") or datos_celda.edificios.has("Town Hall"))
-	var bioma_actual = datos_celda.bioma
-	var terreno_actual = datos_celda.terreno
 	var carac_actual = datos_celda.get("caracteristica", "NONE")
 	
-	if es_centro or terreno_actual in ["MOUNTAINOUS", "OCEAN", "NAVIGABLE_RIVER"] or carac_actual in ["ICE", "NATURAL_WONDER"]:
+	# La validez terreno/feature de cada recurso la decide DATOS_RECURSOS
+	# (es_recurso_valido_en_celda); aquí solo se excluyen casos estructurales.
+	# Las maravillas naturales (features) tampoco gestionan recursos.
+	if es_centro or carac_actual in ["ICE", "NATURAL_WONDER"] or MaravillasNaturales.es_maravilla(datos_celda):
 		if header_node: header_node.visible = false
 		grid_recursos.visible = false
 		if btn_quitar_recurso: btn_quitar_recurso.visible = false
@@ -764,6 +731,13 @@ func actualizar_botones_recursos_ui():
 	grid_recursos.columns = 6
 
 	var recurso_actual = datos_celda.get("recurso", "")
+	# Un nombre de maravilla natural en "recurso" no es un recurso: esas celdas
+	# no muestran el botón de quitar recurso (se gestionan desde Features).
+	if recurso_actual != "" and Constantes.MARAVILLAS_NATURALES.has(recurso_actual):
+		grid_recursos.visible = false
+		if header_node: header_node.visible = false
+		if btn_quitar_recurso: btn_quitar_recurso.visible = false
+		return
 	if recurso_actual != "":
 		grid_recursos.visible = false
 		if header_node: header_node.visible = false
@@ -774,40 +748,39 @@ func actualizar_botones_recursos_ui():
 		if header_node: header_node.visible = true
 		if btn_quitar_recurso: btn_quitar_recurso.visible = false
 
-	if Constantes.RECURSOS_POR_ERA.has(era_actual):
-		var dict_recursos = Constantes.RECURSOS_POR_ERA[era_actual]
-		for rec_name in dict_recursos.keys():
-			if rec_name.strip_edges().to_lower() == "lapis lazuli": continue
-			var biomas_validos = dict_recursos[rec_name]
-			var es_valido = false
-			if bioma_es_valido(bioma_actual, biomas_validos): es_valido = true
-			elif "AGUAS" in biomas_validos and terreno_actual in ["LAKE", "COASTAL", "OCEAN"]: es_valido = true
-				
-			if not es_valido: continue
-			
-			var btn = Button.new()
-			btn.custom_minimum_size = Vector2(46, 46)
-			btn.tooltip_text = rec_name.capitalize()
-			
-			var sb = StyleBoxFlat.new()
-			sb.bg_color = Color(0.12, 0.12, 0.16)
-			sb.border_color = Color(0.8, 0.5, 0.2)
-			sb.set_border_width_all(2)
-			sb.set_corner_radius_all(12)
-			btn.add_theme_stylebox_override("normal", sb)
-			
-			var tex_path = resolver_ruta_asset(rec_name)
-			if ResourceLoader.exists(tex_path):
-				btn.icon = load(tex_path)
-				btn.expand_icon = true
-				btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			else:
-				btn.text = rec_name.substr(0, 4)
-				btn.add_theme_font_size_override("font_size", 10)
-				
-			var rec_param = rec_name
-			btn.pressed.connect(func(): _aplicar_recurso(rec_param))
-			grid_recursos.add_child(btn)
+	var hay_botones = false
+	for rec_name in Constantes.DATOS_RECURSOS.keys():
+		if not ReglasJuego.es_recurso_valido_en_celda(rec_name, datos_celda, era_actual): continue
+		hay_botones = true
+
+		var btn = Button.new()
+		btn.custom_minimum_size = Vector2(46, 46)
+		btn.tooltip_text = rec_name.capitalize()
+
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Color(0.12, 0.12, 0.16)
+		sb.border_color = Color(0.8, 0.5, 0.2)
+		sb.set_border_width_all(2)
+		sb.set_corner_radius_all(12)
+		btn.add_theme_stylebox_override("normal", sb)
+
+		var tex_path = resolver_ruta_asset(rec_name)
+		if ResourceLoader.exists(tex_path):
+			btn.icon = load(tex_path)
+			btn.expand_icon = true
+			btn.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		else:
+			btn.text = rec_name.substr(0, 4)
+			btn.add_theme_font_size_override("font_size", 10)
+
+		var rec_param = rec_name
+		btn.pressed.connect(func(): _aplicar_recurso(rec_param))
+		grid_recursos.add_child(btn)
+
+	# Sin recursos válidos para la celda: se oculta la sección completa.
+	if not hay_botones:
+		grid_recursos.visible = false
+		if header_node: header_node.visible = false
 
 # Devuelve las maravillas naturales válidas para una celda: cumplen bioma/terreno,
 # respetan el límite de casillas por asentamiento y excluyen las que quedarían
@@ -817,7 +790,9 @@ func listar_maravillas_disponibles_celda(coord: Vector2i) -> Array:
 	if not city_grid.has(coord): return disponibles
 	if asentamientos.size() == 0 or asentamiento_activo_idx >= asentamientos.size(): return disponibles
 	var d = city_grid[coord]
-	if celda_tiene_desarrollo(d): return disponibles
+	# En una maravilla natural (feature) sí se listan sus botones: permiten
+	# gestionarla o sustituirla; solo se excluye si hay otro desarrollo.
+	if celda_tiene_desarrollo(d) and not MaravillasNaturales.es_maravilla(d): return disponibles
 	if d.edificios.has("Palace") or d.edificios.has("Town Hall"): return disponibles
 	var b_actual = d.bioma
 	var t_actual = d.terreno
@@ -1155,7 +1130,7 @@ func actualizar_panel_pincel():
 	if not city_grid.has(celda_seleccionada): return
 
 	var d = city_grid[celda_seleccionada]
-	if celda_tiene_desarrollo(d):
+	if celda_tiene_desarrollo(d) and not MaravillasNaturales.es_maravilla(d):
 		for child in grid_biomas.get_children(): child.queue_free()
 		for child in grid_carac.get_children(): child.queue_free()
 		if grid_terrenos: grid_terrenos.visible = false
@@ -1274,6 +1249,10 @@ func actualizar_panel_pincel():
 		if t_actual == "FLAT":
 			valid_c.append("WET")
 			valid_c.append("VEGETATED")
+			# Regla crítica: el floodplain solo se ofrece con río menor presente.
+			if d.get("rio", false): valid_c.append("FLOODPLAIN")
+		# ... o directamente sobre una celda de río navegable.
+		if t_actual == "NAVIGABLE_RIVER":
 			valid_c.append("FLOODPLAIN")
 		if t_actual == "MOUNTAINOUS":
 			valid_c.append("VOLCANO")
@@ -1676,6 +1655,10 @@ func actualizar_panel_externos():
 	var lista_edificios = []
 	var lista_maravillas = []
 	var recurso_celda = d.get("recurso", "")
+	# El nombre de una maravilla natural no es un recurso: no debe filtrar
+	# mejoras ni bloquear edificios en este panel de exteriores.
+	if MaravillasNaturales.es_maravilla(d):
+		recurso_celda = ""
 
 	var permitir_mejoras = not tiene_edificio_normal
 	var permitir_maravillas = not tiene_edificio_normal
@@ -2015,7 +1998,9 @@ func actualizar_panel_ui():
 				if yields_sum.has("Culture"): yields_sum["Culture"] += 1 * era_mult
 				if yields_sum.has("Gold"): yields_sum["Gold"] += 1 * era_mult
 				
-		if "gold_per_resource" in l_bonos_lista and d.get("recurso", "") != "" and d.get("mejora_tipo", "") != "":
+		# Las maravillas naturales (features) no cuentan como recursos ni con
+		# mejora: su bono procede de natural_wonder_boost, no de este líder.
+		if "gold_per_resource" in l_bonos_lista and d.get("recurso", "") != "" and d.get("mejora_tipo", "") != "" and not MaravillasNaturales.es_maravilla(d):
 			if yields_sum.has("Gold"): yields_sum["Gold"] += 1 * era_mult
 			
 		if "natural_wonder_boost" in l_bonos_lista and (d.get("caracteristica", "") == "NATURAL_WONDER" or d.terreno == "NATURAL_WONDER"):
@@ -2306,7 +2291,12 @@ func actualizar_panel_ui():
 		
 	var tiene_desarrollo = celda_tiene_desarrollo(d)
 	if btn_quitar_recurso:
-		btn_quitar_recurso.visible = not tiene_desarrollo and (d.get("recurso", "") != "") and (d.get("caracteristica", "") != "NATURAL_WONDER")
+		var rec_btn = str(d.get("recurso", ""))
+		# El botón solo aparece sobre un recurso real; las maravillas naturales
+		# (features) se gestionan y eliminan desde el panel de Features.
+		btn_quitar_recurso.visible = not tiene_desarrollo and rec_btn != "" \
+			and not MaravillasNaturales.es_maravilla(d) \
+			and not Constantes.MARAVILLAS_NATURALES.has(rec_btn)
 		
 	# Actualizar el recuento flotante de mejoras permitidas
 	actualizar_panel_recuento_mejoras()
@@ -3125,6 +3115,13 @@ func actualizar_icono_celda(coord: Vector2i):
 		lbl_terreno.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(lbl_terreno)
 		datos.nodo_terreno = lbl_terreno
+	
+	# Orden visual del mapa (requisito): los emojis de terreno/features se
+	# pintan por DEBAJO; los recursos (nodo_recurso) y las construcciones
+	# (nodo_icono: mejoras, edificios y maravillas) se pintan POR ENCIMA.
+	datos.nodo_terreno.z_index = 0
+	datos.nodo_recurso.z_index = 1
+	datos.nodo_icono.z_index = 1
 	
 	if is_instance_valid(datos.nodo_recurso):
 		for child in datos.nodo_recurso.get_children(): child.queue_free()
@@ -4016,6 +4013,62 @@ class ReglasJuego:
 			result += " " + caracteristica.capitalize()
 		return result
 
+	# ---------------------------------------------------------------------------
+	# RECURSOS (DATOS_RECURSOS)
+	# ---------------------------------------------------------------------------
+	# Devuelve true si el recurso admite esa mejora en la era indicada.
+	static func recurso_compatible_con_mejora(recurso: String, mejora: String, era: String) -> bool:
+		var d_rec = Constantes.DATOS_RECURSOS.get(recurso, {})
+		if d_rec.is_empty(): return false
+		if d_rec.get("mejora", "") != mejora: return false
+		return era in d_rec.get("eras", [])
+
+	# Regla crítica: un floodplain solo puede existir sobre una celda con río
+	# menor (llanura + rio) o sobre una celda de río navegable.
+	static func es_floodplain_permitida(terreno: String, rio: bool) -> bool:
+		return terreno == "NAVIGABLE_RIVER" or (terreno == "FLAT" and rio)
+
+	# Validez de un recurso para una celda según DATOS_RECURSOS: era (si se
+	# indica), features_validas (denominación canónica de la celda) y
+	# terrenos_validos. ICE y NATURAL_WONDER nunca admiten recursos.
+	static func es_recurso_valido_en_celda(recurso: String, datos: Dictionary, era_actual: String = "") -> bool:
+		var d_rec = Constantes.DATOS_RECURSOS.get(recurso, {})
+		if d_rec.is_empty(): return false
+		if era_actual != "" and not (era_actual in d_rec.get("eras", [])): return false
+
+		var carac = str(datos.get("caracteristica", "NONE"))
+		if carac in ["ICE", "NATURAL_WONDER"]: return false
+
+		var bioma = str(datos.get("bioma", ""))
+		var terreno = str(datos.get("terreno", ""))
+		# Una celda de maravilla natural (por terreno) tampoco admite recursos.
+		if terreno == "NATURAL_WONDER": return false
+		var nom_celda = obtener_denominacion_celda(bioma, terreno, carac)
+
+		for f in d_rec.get("features_validas", []):
+			if str(f) == "Floodplains":
+				if carac == "FLOODPLAIN": return true
+			elif str(f) == nom_celda:
+				return true
+
+		for t_entry in d_rec.get("terrenos_validos", []):
+			var e = str(t_entry).to_upper()
+			if e == "COASTAL" or e == "LAKE" or e == "OCEAN":
+				if terreno == e: return true
+			elif e == "NAVIGABLE RIVER":
+				if terreno == "NAVIGABLE_RIVER": return true
+			elif e == "FLAT":
+				if terreno == "FLAT" and carac == "NONE": return true
+			elif e == "ROUGH":
+				if terreno == "ROUGH" and carac == "NONE": return true
+			elif e.begins_with("FLAT "):
+				if terreno == "FLAT" and carac == "NONE" and bioma == e.substr(5): return true
+			elif e.begins_with("ROUGH "):
+				if terreno == "ROUGH" and carac == "NONE" and bioma == e.substr(6): return true
+			elif terreno in ["FLAT", "ROUGH"] and carac == "NONE" and bioma == e:
+				return true
+		return false
+
 	static func calcular_rendimiento_celda(bioma: String, terreno: String, caracteristica: String, recurso: String, _rio: bool, _era_actual: String) -> Dictionary:
 		var rendimiento = {
 			"Food": 0,
@@ -4072,7 +4125,18 @@ class ReglasJuego:
 				rendimiento.Science += 1
 
 		if recurso != "" and recurso != "Resource":
-			rendimiento.Gold += 1
+			var d_recurso = Constantes.DATOS_RECURSOS.get(recurso)
+			if d_recurso == null:
+				# Solo valores legados: una maravilla natural no es un recurso,
+				# sus rendimientos proceden de MARAVILLAS_NATURALES.
+				if not Constantes.MARAVILLAS_NATURALES.has(recurso):
+					rendimiento.Gold += 1
+			else:
+				var r = d_recurso.get("rendimiento", {})
+				var lista_r = r if r is Array else [r]
+				for parte in lista_r:
+					var tipo_r = str(parte["tipo"])
+					rendimiento[tipo_r] = rendimiento.get(tipo_r, 0) + int(parte["cantidad"])
 
 		return rendimiento
 
@@ -4137,40 +4201,28 @@ class ReglasJuego:
 
 		match mejora_nombre:
 			"Quarry":
-				if era_actual == "Modern Age": return res in ["Jade", "Kaolin", "Limestone", "Marble"]
-				elif era_actual == "Exploration": return res in ["Gypsum", "Jade", "Kaolin", "Limestone", "Marble"]
-				else: return res in ["Gypsum", "Jade", "Kaolin", "Marble", "Limestone"]
+				return recurso_compatible_con_mejora(res, "Quarry", era_actual)
 			"Clay Pit":
 				if era_actual == "Modern Age": return f == "WET" or t in ["HUMEDO", "WET"]
-				else: return f == "WET" or t in ["HUMEDO", "WET"] or res == "Clay"
+				else: return f == "WET" or t in ["HUMEDO", "WET"] or recurso_compatible_con_mejora(res, "Clay Pit", era_actual)
 			"Expedition Base":
 				if era_actual == "Exploration" and civ_actual == "Incan": return f == "NATURAL_WONDER" or t in ["MOUNTAINOUS", "MONTAÑA"]
 				elif era_actual == "Modern Age": return f == "NATURAL_WONDER" or t in ["MOUNTAINOUS", "MONTAÑA"]
 				else: return f == "NATURAL_WONDER"
 			"Farm": return t in ["FLAT", "PLANO"]
 			"Woodcutter":
-				if era_actual == "Antiquity": return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res == "Hardwood"
-				elif era_actual == "Exploration": return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res in ["Cocoa", "Hardwood", "Spices"]
-				else: return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or res in ["Cocoa", "Hardwood", "Quinine", "Rubber", "Spices"]
+				return f == "VEGETATED" or t in ["VEGETACION", "VEGETATED"] or recurso_compatible_con_mejora(res, "Woodcutter", era_actual)
 			"Fishing Boat":
 				var val_water = (t in ["COASTAL", "COSTA", "NAVIGABLE_RIVER", "RIO_NAVEGABLE"]) and not rio
-				if era_actual == "Antiquity": return val_water or res in ["Cowrie", "Crabs", "Dyes", "Fish", "Pearls", "Turtles"]
-				elif era_actual == "Exploration": return val_water or res in ["Cowrie", "Crabs", "Dyes", "Fish", "Pearls", "Turtles", "Whales"]
-				else: return val_water or res in ["Cowrie", "Crabs", "Fish", "Pearls", "Whales"]
+				return val_water or recurso_compatible_con_mejora(res, "Fishing Boat", era_actual)
 			"Mine":
-				if era_actual == "Antiquity": return t in ["ROUGH", "ABRUPTO"] or res in ["Gold", "Iron", "Rubies", "Salt", "Silver", "Tin"]
-				elif era_actual == "Exploration": return t in ["ROUGH", "ABRUPTO"] or res in ["Gold", "Iron", "Rubies", "Silver", "Niter", "Tin"]
-				else: return t in ["ROUGH", "ABRUPTO"] or res in ["Coal", "Gold", "Iron", "Niter", "Silver", "Tin"]
+				return t in ["ROUGH", "ABRUPTO"] or recurso_compatible_con_mejora(res, "Mine", era_actual)
 			"Camp":
-				if era_actual == "Antiquity": return res in ["Ivory", "Camels", "Hides", "Wild Game"]
-				elif era_actual == "Exploration": return res in ["Camels", "Furs", "Ivory", "Truffles", "Wild Game"]
-				else: return res in ["Furs", "Ivory", "Truffles"]
-			"Pasture": return res in ["Horses", "Llamas", "Wool"] if era_actual == "Antiquity" else res in ["Horses", "Llamas"]
+				return recurso_compatible_con_mejora(res, "Camp", era_actual)
+			"Pasture": return recurso_compatible_con_mejora(res, "Pasture", era_actual)
 			"Plantation":
-				if era_actual == "Antiquity": return res in ["Cotton", "Dates", "Flax", "Incense", "Mangoes", "Rice", "Silk", "Wine"]
-				elif era_actual == "Exploration": return res in ["Cotton", "Dates", "Flax", "Incense", "Mangoes", "Rice", "Silk", "Sugar", "Tea", "Wine"]
-				else: return res in ["Citrus", "Coffee", "Cotton", "Rice", "Silk", "Sugar", "Tea", "Tobacco", "Wine"]
-			"Oil Rig": return res == "Oil"
+				return recurso_compatible_con_mejora(res, "Plantation", era_actual)
+			"Oil Rig": return recurso_compatible_con_mejora(res, "Oil Rig", era_actual)
 			"Baray": return t in ["FLAT", "PLANO"] and adyacentes_misma_mejora == 0
 			"Great Wall", "Ming Great Wall": return adyacentes_misma_mejora <= 2
 			"Hawilt", "Poktop", "Megalith": return t in ["FLAT", "PLANO"]
@@ -4230,7 +4282,8 @@ class ReglasJuego:
 				elif rend == "Gold" or rend == "Food":
 					if t in ["COASTAL", "COSTA", "NAVIGABLE_RIVER", "RIO_NAVEGABLE"]: bonus += 1
 				elif rend == "Science" or rend == "Production":
-					if vd.get("recurso", "") != "": bonus += 1
+					# Las maravillas naturales no son recursos: no cuentan aquí.
+					if vd.get("recurso", "") != "" and not MaravillasNaturales.es_maravilla(vd): bonus += 1
 
 		var mi_celda = city_grid[coord]
 		var mt = mi_celda.get("terreno", "").strip_edges().to_upper()
@@ -4264,6 +4317,9 @@ class ReglasJuego:
 		var datos_celda = city_grid[coord]
 		var t = datos_celda.get("terreno", "").strip_edges().to_upper()
 		var c = datos_celda.get("caracteristica", "NONE").strip_edges().to_upper()
+		# Las maravillas naturales son features del terreno: no admiten
+		# edificios (su nombre en "recurso" no es un recurso).
+		if MaravillasNaturales.es_maravilla(datos_celda): return false
 		var es_recurso = (datos_celda.get("recurso", "") != "")
 	
 		if c == "ICE" or t in ["OCEAN", "OCEANO"]: return false
@@ -4378,39 +4434,66 @@ class GestorPincel:
 	static func aplicar_bioma_y_terreno(main: Node2D, bioma: String, terreno: String):
 		if not main.city_grid.has(main.celda_seleccionada): return
 		var datos = main.city_grid[main.celda_seleccionada]
-		if celda_tiene_desarrollo(datos): return
+		# Las maravillas naturales se editan desde el panel de Features: no se
+		# bloquean por tener la base de expedición u otra mejora encima.
+		if not MaravillasNaturales.es_maravilla(datos) and celda_tiene_desarrollo(datos): return
 	
 		datos.bioma = bioma
 		datos.terreno = terreno
 	
-		if terreno != "FLAT" and datos.caracteristica in ["WET", "VEGETATED", "FLOODPLAIN"]:
+		if terreno != "FLAT" and datos.caracteristica in ["WET", "VEGETATED"]:
+			datos.caracteristica = "NONE"
+		# Regla crítica de floodplains: exigen río menor (en llanura) o río navegable.
+		if datos.caracteristica == "FLOODPLAIN" and not ReglasJuego.es_floodplain_permitida(terreno, datos.get("rio", false)):
 			datos.caracteristica = "NONE"
 		
-		if terreno in ["MOUNTAINOUS", "NAVIGABLE_RIVER", "OCEAN"]:
-			datos.recurso = ""
+		# La limpieza de recursos inválidos la resuelve validar_y_refrescar_pincel
+		# con la información centralizada en DATOS_RECURSOS.
 		
 		validar_y_refrescar_pincel(main)
 
 	static func aplicar_caracteristica(main: Node2D, c: String):
 		if not main.city_grid.has(main.celda_seleccionada): return
 		var datos = main.city_grid[main.celda_seleccionada]
-		if celda_tiene_desarrollo(datos): return
+		var es_maravilla_celda = MaravillasNaturales.es_maravilla(datos)
+		# Las maravillas naturales se gestionan desde Features (p. ej. None):
+		# se permite cambiar la feature aunque tengan la base de expedición.
+		if not es_maravilla_celda and celda_tiene_desarrollo(datos): return
 	
-		if c in ["WET", "VEGETATED", "FLOODPLAIN"] and datos.terreno != "FLAT":
+		if c == "FLOODPLAIN":
+			# Regla crítica: floodplain solo con río menor o río navegable.
+			if not ReglasJuego.es_floodplain_permitida(datos.terreno, datos.get("rio", false)):
+				return
+		elif c in ["WET", "VEGETATED"] and datos.terreno != "FLAT":
 			return
+		# Cambiar la feature de una maravilla natural la retira: su nombre no
+		# es un recurso, así que se limpia "recurso" y la mejora de activación.
+		if es_maravilla_celda and c != "NATURAL_WONDER" and str(datos.get("caracteristica", "")) == "NATURAL_WONDER":
+			if Constantes.MARAVILLAS_NATURALES.has(str(datos.get("recurso", ""))):
+				datos.recurso = ""
+			if datos.get("mejora_tipo", "") == MaravillasNaturales.MEJORA_ACTIVACION:
+				datos.mejora_tipo = ""
 		datos.caracteristica = c
 		validar_y_refrescar_pincel(main)
 
 	static func validar_y_refrescar_pincel(main: Node2D):
 		var datos = main.city_grid[main.celda_seleccionada]
 	
+		# Regla crítica: si la celda deja de tener río (menor o navegable) el
+		# floodplain se retira; después se valida el recurso contra la celda ya
+		# consistente usando DATOS_RECURSOS.
+		if datos.get("caracteristica", "") == "FLOODPLAIN" and not ReglasJuego.es_floodplain_permitida(datos.get("terreno", ""), datos.get("rio", false)):
+			datos.caracteristica = "NONE"
+
 		var nom_rec = datos.get("recurso", "")
-		if nom_rec != "" and Constantes.RECURSOS_POR_ERA.has(main.era_actual):
-			var b_actual = datos.bioma
-			var t_actual = datos.terreno
-			var rec_data = Constantes.RECURSOS_POR_ERA[main.era_actual].get(nom_rec, [])
-			var bioma_valido = ("TODOS" in rec_data) or (b_actual in rec_data) or ("AGUAS" in rec_data and t_actual in ["LAKE", "COASTAL", "OCEAN"])
-			if not bioma_valido or t_actual in ["MOUNTAINOUS", "OCEAN", "NAVIGABLE_RIVER"] or datos.caracteristica in ["NATURAL_WONDER", "ICE"]:
+		# Un nombre de maravilla natural en "recurso" solo es válido mientras la
+		# celda siga siendo una maravilla (feature); si la feature se limpia, el
+		# nombre desaparece con ella: no es un recurso.
+		if nom_rec != "" and Constantes.MARAVILLAS_NATURALES.has(nom_rec) and not MaravillasNaturales.es_maravilla(datos):
+			datos.recurso = ""
+			nom_rec = ""
+		if nom_rec != "" and Constantes.DATOS_RECURSOS.has(nom_rec):
+			if not ReglasJuego.es_recurso_valido_en_celda(nom_rec, datos, main.era_actual):
 				datos.recurso = ""
 
 		main.actualizar_panel_pincel()
@@ -4428,8 +4511,12 @@ class GestorPincel:
 	
 		if datos.edificios.has("Palace") or datos.edificios.has("Town Hall") or datos.ajeno: return
 	
-		# Restricción estricta de terreno para recursos
-		if datos.terreno in ["MOUNTAINOUS", "OCEAN", "NAVIGABLE_RIVER"] or datos.caracteristica in ["NATURAL_WONDER", "ICE"]:
+		# Las maravillas naturales son features: su nombre vive en "recurso"
+		# pero no se gestionan con los botones de recursos.
+		if MaravillasNaturales.es_maravilla(datos): return
+		# Validez centralizada en DATOS_RECURSOS: terreno, feature y era.
+		# "" es la operación de quitar recurso: no hay validez que comprobar.
+		if recurso_nombre != "" and not ReglasJuego.es_recurso_valido_en_celda(recurso_nombre, datos, main.era_actual):
 			return
 	
 		datos.recurso = recurso_nombre
@@ -4443,7 +4530,9 @@ class GestorPincel:
 	static func aplicar_maravilla_natural(main: Node2D, maravilla_nombre: String):
 		if not main.city_grid.has(main.celda_seleccionada): return
 		var datos = main.city_grid[main.celda_seleccionada]
-		if celda_tiene_desarrollo(datos): return
+		# Permitido también sobre una maravilla existente (cambio de maravilla
+		# desde Features); para el resto sigue exigiendo celda sin desarrollo.
+		if not MaravillasNaturales.es_maravilla(datos) and celda_tiene_desarrollo(datos): return
 		# Validación: bioma/terreno, límite de casillas por asentamiento y
 		# exclusión de adyacencia frente a maravillas naturales distintas
 		# (la lista de disponibles ya filtra las que infringen la regla).
@@ -4475,9 +4564,13 @@ class GestorPincel:
 	static func toggle_rio_celda(main: Node2D):
 		if not main.city_grid.has(main.celda_seleccionada): return
 		var datos = main.city_grid[main.celda_seleccionada]
-		if celda_tiene_desarrollo(datos): return
+		# Las maravillas naturales no se bloquean por tener desarrollo.
+		if not MaravillasNaturales.es_maravilla(datos) and celda_tiene_desarrollo(datos): return
 	
 		datos.rio = not datos.rio
+		# Regla crítica: sin río no puede subsistir un floodplain.
+		if datos.get("caracteristica", "") == "FLOODPLAIN" and not ReglasJuego.es_floodplain_permitida(datos.terreno, datos.rio):
+			datos.caracteristica = "NONE"
 		main.actualizar_panel_pincel()
 		main.actualizar_sugerencias_cache()
 		main.actualizar_iconos_todos()
@@ -5026,6 +5119,13 @@ class GestorArchivos:
 				var rec_str = ""
 				if typeof(loaded_rec) == TYPE_BOOL: rec_str = "Resource" if loaded_rec else ""
 				else: rec_str = str(loaded_rec)
+				# Un nombre de maravilla natural en "recurso" solo es válido si
+				# la celda sigue siendo una maravilla (feature); en caso contrario
+				# no es un recurso y se retira al cargar.
+				if rec_str != "" and Constantes.MARAVILLAS_NATURALES.has(rec_str) \
+						and str(c.get("caracteristica", "NONE")) != "NATURAL_WONDER" \
+						and str(c.get("terreno", "FLAT")) != "NATURAL_WONDER":
+					rec_str = ""
 			
 				var dist = HexMath.dist_hex(coord, centro)
 				var reclamada_val = c.get("reclamada", dist <= 1)
