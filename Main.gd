@@ -16,11 +16,16 @@ extends Node2D
 #         GestorConstruccion -> construccion de edificios y mejoras + sugerencias
 #         GestorAsentamientos-> ciclo de vida de asentamientos y eras
 #         GestorArchivos     -> guardado/carga de partidas (JSON)
+#         GestorMementos     -> reglas de seleccion de mementos
+#         GestorPoliticas    -> reglas de politicas y tradiciones heredadas
 #         GestorDialogos     -> dialogos modales (lider, era, renombrar...)
 #         GestorInterfaz     -> construccion del arbol de interfaz
 #
-# Los datos estaticos (lideres, edificios, mejoras, maravillas, civilizaciones,
-# recursos, biomas...) NO viven aqui: se leen de "Constantes.gd".
+# TODO el proyecto se reparte en DOS scripts: este (Main.gd: clase principal +
+# modulos internos) y "Constantes.gd" (datos estaticos y valores por defecto).
+# Aqui NO vive ningun diccionario de datos: lideres, edificios, mejoras,
+# maravillas, civilizaciones, recursos, biomas, mementos y politicas se leen de
+# "Constantes.gd" (Constantes.DATOS_*).
 #
 # INDICE DEL ARCHIVO
 #   - ESTADO DE LA PARTIDA Y REFERENCIAS DE UI .... variables de la clase
@@ -51,6 +56,29 @@ var era_actual: String = "Antiquity"
 var civ_actual: String = "None"
 var civ_sincretismo: String = "None"
 var era_transicionada: bool = false
+
+# --- SISTEMAS NUEVOS (Mementos, Rivales, Políticas) ---
+# Selección de mementos activa por Era (máximo Constantes.MEMENTOS_MAXIMO_POR_ERA).
+var mementos_activos: Dictionary = {"Antiquity": [], "Exploration": [], "Modern Age": []}
+
+# Políticas activas por Era (Social/Crisis/Ideology). El contador total de la
+# UI INCLUYE además las tradiciones activas (máximos por defecto:
+# Constantes.MAXIMO_POLITICAS_POR_ERA y Constantes.MAXIMO_TRADICIONES_POR_ERA).
+var politicas_activas: Dictionary = {"Antiquity": [], "Exploration": [], "Modern Age": []}
+
+# Tradiciones activas por Era (tope exclusivo MAXIMO_TRADICIONES_POR_ERA).
+var tradiciones_activas: Dictionary = {"Antiquity": [], "Exploration": [], "Modern Age": []}
+
+# Tradiciones que han estado activas en algún momento: se GUARDAN y se acoplan
+# a las listas de las Eras siguientes (quedan disponibles para reseleccionarse).
+var tradiciones_historicas: Array = []
+
+# Topes de disponibilidad ampliables con los botones "+" del modal de
+# Políticas y Tradiciones (se guardan con la partida). Invariant: pol >= trad.
+var tope_politicas: int = Constantes.MAXIMO_POLITICAS_POR_ERA
+var tope_tradiciones: int = Constantes.MAXIMO_TRADICIONES_POR_ERA
+# Configuración de rivales: [{"lider": String, "civ": String, "relacion": String, "rutas": int}, ...]
+var rivales_config: Array = []
 
 var partidas_guardadas: Dictionary = {}
 var partida_actual_nombre: String = "Autosave"
@@ -210,8 +238,15 @@ func mostrar_dialogo_renombrar(idx: int): GestorDialogos.mostrar_dialogo_renombr
 func mostrar_dialogo_borrar_asentamiento(idx: int): GestorDialogos.mostrar_dialogo_borrar_asentamiento(self, idx)
 func mostrar_dialogo_nueva_partida(): GestorDialogos.mostrar_dialogo_nueva_partida(self)
 func mostrar_dialogo_confirmar_siguiente_era(): GestorDialogos.mostrar_dialogo_confirmar_siguiente_era(self)
+
+# Al pulsar el botón de cambiar Era se abre primero el panel de Políticas y
+# Tradiciones para seleccionar las tradiciones que pasarán a la siguiente Era.
+func mostrar_panel_politicas_cambio_era(): GestorDialogos.mostrar_dialogo_politicas(self, true)
 func mostrar_dialogo_sincretismo(): GestorDialogos.mostrar_dialogo_sincretismo(self)
 func mostrar_dialogo_lideres_inicio(iniciar_nueva_partida_despues: bool = true): GestorDialogos.mostrar_dialogo_lideres_inicio(self, iniciar_nueva_partida_despues)
+func mostrar_dialogo_mementos(): GestorDialogos.mostrar_dialogo_mementos(self)
+func mostrar_dialogo_rivales(): GestorDialogos.mostrar_dialogo_rivales(self)
+func mostrar_dialogo_politicas(): GestorDialogos.mostrar_dialogo_politicas(self)
 func crear_nuevo_asentamiento(tipo: String): GestorAsentamientos.crear_nuevo_asentamiento(self, tipo)
 func resetear_asentamiento(idx: int): GestorAsentamientos.resetear_asentamiento(self, idx)
 func cambiar_asentamiento_activo(idx: int): GestorAsentamientos.cambiar_asentamiento_activo(self, idx)
@@ -372,6 +407,10 @@ func _calcular_celdas_puente_requeridas() -> Dictionary:
 					if city_grid.has(n) and HexMath.dist_hex(n, centro) < dist_actual:
 						mejor_vecino = n
 						break
+				# Sin vecino más cercano al centro (celdas dispersas o sin camino
+				# hacia él): no hay por dónde avanzar, se corta para no girar sin fin.
+				if mejor_vecino == actual:
+					break
 				actual = mejor_vecino
 				if u_valid.has(actual): break
 				if not _es_celda_urbana(actual):
@@ -659,7 +698,13 @@ func actualizar_lista_asentamientos_ui():
 			var index_t = i
 			btn_type.pressed.connect(func():
 				asentamientos[index_t].tipo = "City"
+				# El cupo de especialistas depende del tipo del asentamiento: al
+				# promocionar a Ciudad se abren los cupos de todas sus celdas, y el
+				# panel de la celda se repinta para que la fila aparezca en ese
+				# instante en vez de esperar a la siguiente actualización.
+				GestorAsentamientos.sincronizar_especialistas_asentamiento(self, index_t)
 				actualizar_lista_asentamientos_ui()
+				actualizar_panel_ui()
 				guardar_partida_actual()
 			)
 			hbox.add_child(btn_type)
@@ -1368,6 +1413,15 @@ func _crear_cabecera_panel(texto: String, asset_name: String) -> HBoxContainer:
 	return hbox
 
 func actualizar_panel_construccion():
+	# Sin escena cargada (arranque headless) el panel aún no existe:
+	# no hay nada que refrescar.
+	if panel_construccion == null: return
+	# BLINDAJE ANTI-ESPECIALISTAS: los especialistas NO son elementos
+	# construibles. Su UI (contador X/Y + botones [+] [-]) pertenece en exclusiva
+	# al panel de información de la celda, justo debajo de sus rendimientos; si
+	# alguna vez quedara colgada de este panel, se retira aquí antes de pintar
+	# las listas de mejoras/edificios/maravillas.
+	_retirar_fila_especialistas(panel_construccion)
 	if grid_mejoras: grid_mejoras.visible = false
 	if grid_edificios: grid_edificios.visible = false
 	if grid_maravillas: grid_maravillas.visible = false
@@ -1448,6 +1502,10 @@ func actualizar_panel_construccion():
 			# del filtro normal de compatibilidad con recursos.
 			var es_maravilla_celda = MaravillasNaturales.es_maravilla(datos_c)
 			for mej_nombre in Constantes.DATOS_MEJORAS.keys():
+				# Filtro de construibles: la UI de especialistas (y cualquier
+				# pseudo-elemento de Constantes.ELEMENTOS_NO_CONSTRUIBLES) NO se
+				# construye, así que no puede colarse en esta lista.
+				if not ReglasJuego.es_construible(mej_nombre): continue
 				var d_mej = Constantes.DATOS_MEJORAS[mej_nombre]
 
 				if d_mej.has("civ") and d_mej.civ != civ_actual and d_mej.civ != civ_sincretismo: continue
@@ -1462,7 +1520,7 @@ func actualizar_panel_construccion():
 				elif recurso_celda != "":
 					if not es_mejora_compatible_con_recurso(mej_nombre, recurso_celda, era_actual): continue
 
-				if ReglasJuego.es_mejora_valida(celda_seleccionada, mej_nombre, asent_centro, city_grid, era_actual, civ_actual, asent_tipo):
+				if ReglasJuego.es_mejora_valida(celda_seleccionada, mej_nombre, asent_centro, city_grid, era_actual, civ_actual, asent_tipo, civ_sincretismo):
 					lista_mejoras_validas.append(mej_nombre)
 
 					
@@ -1489,6 +1547,8 @@ func actualizar_panel_construccion():
 			var lista_candidatos = []
 			
 			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
+				# Filtro de construibles: los especialistas no son edificios.
+				if not ReglasJuego.es_construible(edif_nombre): continue
 				var d = Constantes.DATOS_EDIFICIOS[edif_nombre]
 				if edif_nombre in ["Palace", "Town Hall"]: continue
 				
@@ -1496,9 +1556,16 @@ func actualizar_panel_construccion():
 				var es_muralla = ReglasJuego.es_edificio_muralla(edif_nombre)
 				
 				var era_edif = d.get("era", "All")
-				if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
+				# Solo edificios de la ERA ACTUAL: los de eras anteriores se
+				# retiran del menú. Excepción: los almacenes (Warehouse) de eras
+				# anteriores siguen listándose hasta que se construyan (la
+				# comprobación de "ya construido" más abajo los oculta después).
+				if era_edif != "All":
+					var orden_edif = Constantes.ORDEN_ERAS.get(era_edif, 0)
+					var orden_actual_panel = Constantes.ORDEN_ERAS.get(era_actual, 0)
+					if orden_edif != orden_actual_panel and not (orden_edif < orden_actual_panel and d.get("tipo", "") == "Warehouse"): continue
 				if d.has("civ") and d.civ != civ_actual and d.civ != civ_sincretismo: continue
-				if edificios_construidos.has(edif_nombre) and not is_wonder and not es_muralla: continue
+				if ReglasJuego.se_oculta_por_ya_construido(edif_nombre, edificios_construidos): continue
 				if edif_nombre in datos_c.edificios: continue
 				
 				if not ReglasJuego.es_ubicacion_valida_para_edificio(celda_seleccionada, edif_nombre, asent_centro, era_actual, civ_actual, city_grid, asent_tipo, asentamientos): continue
@@ -1577,6 +1644,9 @@ func _añadir_boton_reclamar_ajeno(vbox_panel_externo: Node, datos_celda: Dictio
 		vbox_panel_externo.add_child(HSeparator.new())
 
 func actualizar_panel_externos():
+	# Blindaje: este panel también lista elementos construibles/externos, nunca
+	# la UI de especialistas (que vive en el panel de información de la celda).
+	_retirar_fila_especialistas(panel_externos)
 	if lbl_ext_edif: lbl_ext_edif.visible = false
 	if lbl_ext_mej: lbl_ext_mej.visible = false
 	if scroll_ext_edif: scroll_ext_edif.visible = false
@@ -1665,6 +1735,8 @@ func actualizar_panel_externos():
 
 	if permitir_mejoras:
 		for mej_nombre in Constantes.DATOS_MEJORAS.keys():
+			# Mismo filtro de construibles que el panel de construcción.
+			if not ReglasJuego.es_construible(mej_nombre): continue
 			var d_mej = Constantes.DATOS_MEJORAS[mej_nombre]
 			var era_mej = d_mej.get("era", "Antiquity")
 			if Constantes.ORDEN_ERAS.get(era_mej, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
@@ -1679,18 +1751,30 @@ func actualizar_panel_externos():
 				if d.terreno not in ["MOUNTAINOUS", "OCEAN"] and d.get("caracteristica", "") not in ["ICE", "NATURAL_WONDER"]:
 					mejora_valida = true
 			else:
-				mejora_valida = ReglasJuego.es_mejora_valida(celda_seleccionada, mej_nombre, asent_centro, city_grid, era_actual, civ_actual, asent_tipo)
+				mejora_valida = ReglasJuego.es_mejora_valida(celda_seleccionada, mej_nombre, asent_centro, city_grid, era_actual, civ_actual, asent_tipo, civ_sincretismo)
 				
 			if mejora_valida:
 				lista_mejoras.append(mej_nombre)
 				
 	if recurso_celda == "":
+		var edificios_construidos_ext = {}
+		for c_ext in city_grid.values():
+			for e_ext in c_ext.edificios:
+				if not ReglasJuego.es_edificio_obsoleto(e_ext, c_ext.q * Vector2i.RIGHT + c_ext.r * Vector2i.DOWN, era_actual, city_grid):
+					edificios_construidos_ext[e_ext] = true
 		for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
+			# Mismo filtro de construibles que el panel de construcción.
+			if not ReglasJuego.es_construible(edif_nombre): continue
 			var d_edif = Constantes.DATOS_EDIFICIOS[edif_nombre]
 			if edif_nombre in ["Palace", "Town Hall"]: continue
 						
 			var era_edif = d_edif.get("era", "All")
-			if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era_actual, 0): continue
+			# Misma regla que el panel principal: solo la era actual, más los
+			# almacenes (Warehouse) de eras anteriores todavía sin construir.
+			if era_edif != "All":
+				var orden_edif = Constantes.ORDEN_ERAS.get(era_edif, 0)
+				var orden_actual_ext = Constantes.ORDEN_ERAS.get(era_actual, 0)
+				if orden_edif != orden_actual_ext and not (orden_edif < orden_actual_ext and d_edif.get("tipo", "") == "Warehouse" and not edificios_construidos_ext.has(edif_nombre)): continue
 			
 			if edif_nombre in d.get("edificios", []): continue
 			
@@ -1847,11 +1931,28 @@ func actualizar_panel_ui():
 		parent.add_child(dyn_node)
 		
 	lbl_info.visible = false
-	for c in dyn_node.get_children(): c.queue_free()
+	# Se RETIRAN ya mismo (remove_child + queue_free) y no solo queue_free():
+	# un nodo en cola de borrado sigue en el árbol hasta final de frame y, si se
+	# repinta dos veces el mismo frame, colisiona el nombre de la fila de
+	# especialistas (Godot la renombraría con un "@..." que rompe las búsquedas
+	# por nombre) y se pintarían duplicados de un frame a otro.
+	for c in dyn_node.get_children():
+		dyn_node.remove_child(c)
+		c.queue_free()
 	
 	var asent_centro = asentamientos[asentamiento_activo_idx].centro if (asentamientos.size() > 0 and asentamiento_activo_idx < asentamientos.size()) else Vector2i.ZERO
 	var es_reclamada = d.get("reclamada", HexMath.dist_hex(celda_seleccionada, asent_centro) <= 1)
 	
+	var es_urbano = false
+	var tipo_celda_str = "RURAL"
+	var color_fondo_tipo = Color(0.85, 0.2, 0.2)
+	if es_reclamada or d.get("ajeno", false):
+		es_urbano = _es_celda_urbana(celda_seleccionada)
+		tipo_celda_str = "URBAN" if es_urbano else "RURAL"
+		color_fondo_tipo = Color(0.2, 0.4, 0.8) if es_urbano else Color(0.85, 0.2, 0.2)
+	# Tipo del asentamiento dueño de la celda: es el que decide si puede haber
+	# especialistas (solo Ciudades y Capitales; en los pueblos ninguno).
+	var tipo_asent_celda: String = ReglasJuego.tipo_asentamiento_de_celda(celda_seleccionada, asentamientos, asentamiento_activo_idx)
 	if es_reclamada or d.get("ajeno", false):
 		var ter_desc = d.terreno.to_lower().capitalize()
 		if ter_desc == "Flat": ter_desc = ""
@@ -1890,10 +1991,6 @@ func actualizar_panel_ui():
 		lbl_ter.add_theme_font_size_override("font_size", 14)
 		panel_ter.add_child(lbl_ter)
 		hbox_ter.add_child(panel_ter)
-		
-		var es_urbano = _es_celda_urbana(celda_seleccionada)
-		var tipo_celda_str = "URBAN" if es_urbano else "RURAL"
-		var color_fondo_tipo = Color(0.2, 0.4, 0.8) if es_urbano else Color(0.85, 0.2, 0.2)
 		
 		var panel_tipo = PanelContainer.new()
 		var sb_tipo = StyleBoxFlat.new()
@@ -1941,11 +2038,7 @@ func actualizar_panel_ui():
 				yields_sum["Food"] += 3 * era_mult
 				yields_sum["Production"] += 3 * era_mult
 				
-				var asent_t = "Town"
-				for asent in asentamientos:
-					if asent.grid.has(celda_seleccionada) or asent.centro == celda_seleccionada:
-						asent_t = asent.tipo
-						break
+				var asent_t: String = ReglasJuego.tipo_asentamiento_de_celda(celda_seleccionada, asentamientos, asentamiento_activo_idx)
 				if (asent_t == "City" or asent_t == "Capital") and asentamiento_tiene_agua_dulce(celda_seleccionada):
 					yields_sum["Happiness"] += 3 * era_mult
 			
@@ -1991,6 +2084,43 @@ func actualizar_panel_ui():
 				var w_yields = w_data.get("yields", {})
 				for wk in w_yields.keys():
 					if yields_sum.has(wk): yields_sum[wk] += w_yields[wk]
+		# --- ESPECIALISTAS DE ESTA CELDA (mecánica Civ VII) ---
+		# ACTIVOS: cada especialista multiplica la adyacencia de los edificios de
+		# la celda (+50% de adyacencia base por especialista) y consume -2
+		# Alimento. La Felicidad que consume depende de las políticas activas
+		# (Ethics / Scholars la elevan a -1 por especialista).
+		# EN LETARGO (pueblo, edificio obsoleto o almacén: ver
+		# ReglasJuego.especialistas_en_letargo_celda): no aportan adyacencia ni
+		# bonos de políticas; solo consumen -1 Alimento y -1 Felicidad cada uno.
+		# La celda se sincroniza con su tipo y sus edificios ANTES de leer los
+		# asignados, así que los datos nunca quedan desfasados.
+		ReglasJuego.sincronizar_especialistas_celda(d, tipo_asent_celda)
+		var num_esp_celda: int = int(d.get("especialistas_asignados", 0))
+		var esp_en_letargo: bool = ReglasJuego.especialistas_en_letargo_celda(d, tipo_asent_celda, celda_seleccionada, era_actual, city_grid)
+		if esp_en_letargo and num_esp_celda > 0 and not es_pincel:
+			# LETARGO: sin rendimiento, sin adyacencia y sin bonos de políticas;
+			# mantenimiento fijo de -1 Alimento y -1 Felicidad por especialista
+			# (sustituye al -2 Alimento normal y a los costes de políticas).
+			yields_sum["Food"] = int(yields_sum.get("Food", 0)) + Constantes.ESPECIALISTAS_LETARGO_ALIMENTO * num_esp_celda
+			yields_sum["Happiness"] = int(yields_sum.get("Happiness", 0)) + Constantes.ESPECIALISTAS_LETARGO_FELICIDAD * num_esp_celda
+		elif num_esp_celda > 0 and not es_pincel:
+			var ady_extra_esp := 0.0
+			for edif_esp in d.edificios:
+				if Constantes.DATOS_EDIFICIOS.has(edif_esp) and not ReglasJuego.es_edificio_obsoleto(edif_esp, celda_seleccionada, era_actual, city_grid):
+					ady_extra_esp += float(ReglasJuego.calcular_bono_edificio(celda_seleccionada, edif_esp, era_actual, city_grid)) * Constantes.ESPECIALISTAS_BONO_ADYACENCIA * float(num_esp_celda)
+			var rend_esp: String = ""
+			for edif_esp in d.edificios:
+				if edif_esp == "Palace" or edif_esp == "Town Hall":
+					continue
+				rend_esp = str(Constantes.DATOS_EDIFICIOS.get(edif_esp, {}).get("rendimiento", ""))
+				break
+			if rend_esp != "" and yields_sum.has(rend_esp):
+				yields_sum[rend_esp] = int(yields_sum[rend_esp]) + int(round(ady_extra_esp))
+			yields_sum["Food"] = int(yields_sum.get("Food", 0)) + Constantes.ESPECIALISTAS_ALIMENTO_MANTENIMIENTO * num_esp_celda
+			var politicas_celda: Array = GestorPoliticas.politicas_y_tradiciones_activas(era_actual, politicas_activas, tradiciones_activas)
+			ReglasJuego.aplicar_bonos_politicas_especialistas(yields_sum, politicas_celda, num_esp_celda)
+
+
 		
 		if d.get("mejora_tipo", "") != "":
 			var d_mej = Constantes.DATOS_MEJORAS.get(d.mejora_tipo, {})
@@ -2069,8 +2199,20 @@ func actualizar_panel_ui():
 		
 	margin_y.add_child(hbox_y)
 	panel_y.add_child(margin_y)
+	# La caja de rendimientos lleva nombre propio: fija que la fila de
+	# especialistas va JUSTO DEBAJO de los rendimientos de la celda (los tests
+	# comprueban ese orden por índice de hermanos).
+	panel_y.name = Constantes.NODO_CAJA_RENDIMIENTOS_CELDA
 	dyn_node.add_child(panel_y)
 	
+	# --- ESPECIALISTAS DE LA CELDA (mecánica Civ VII) ---
+	# La UI de especialistas (contador X/Y + botones [+]/[-]) vive ÚNICA Y
+	# EXCLUSIVAMENTE aquí: en el panel de información de la celda, justo debajo
+	# de su caja de rendimientos. El panel de construcción NO la pinta nunca:
+	# los especialistas no son elementos construibles (ver
+	# ReglasJuego.es_construible() y el blindaje de actualizar_panel_construccion).
+	_crear_fila_especialistas_celda(dyn_node, celda_seleccionada, d, tipo_asent_celda, es_urbano, es_pincel)
+
 	var vbox_bldgs = VBoxContainer.new()
 	vbox_bldgs.add_theme_constant_override("separation", 8)
 	
@@ -2125,11 +2267,21 @@ func actualizar_panel_ui():
 		hbox_left.alignment = BoxContainer.ALIGNMENT_BEGIN
 		hbox_left.add_theme_constant_override("separation", 8)
 		
-		if edif not in ["Palace", "Town Hall"]:
+		# El botón [X] se desactiva para los edificios que nunca se eliminan: los
+		# centros de gobierno, las murallas (solo se sustituyen por la de la era
+		# siguiente) y los OBSOLETOS: estos solo desaparecen si el jugador
+		# construye un edificio nuevo encima (sobreconstrucción). Las maravillas
+		# construibles SÍ llevan [X] mientras dura la era a la que corresponden;
+		# pasado ese plazo quedan como hito permanente.
+		var es_wonder = Constantes.DATOS_EDIFICIOS.get(edif, {}).get("is_wonder", false)
+		var wonder_fuera_de_era = es_wonder and not ReglasJuego.es_maravilla_borrable_en_era(edif, era_actual)
+		var es_no_removible = edif in ["Palace", "Town Hall"] or ReglasJuego.es_edificio_muralla(edif) or wonder_fuera_de_era or is_obsolete
+		if not es_no_removible:
 			var edif_c = edif
 			var btn_del = crear_boton_borrar_estilizado.call(func(): _borrar_edificio_especifico(edif_c))
 			hbox_left.add_child(btn_del)
 		else:
+			# Hueco equivalente sin botón para conservar la alineación del icono.
 			var spacer = Control.new()
 			spacer.custom_minimum_size = Vector2(26, 0)
 			hbox_left.add_child(spacer)
@@ -2180,12 +2332,8 @@ func actualizar_panel_ui():
 			elif edif == "Town Hall":
 				e_yields["Food"] = 3 * era_mult
 				e_yields["Production"] = 3 * era_mult
-				var asent_t = "Town"
-				for asent in asentamientos:
-					if asent.grid.has(celda_seleccionada) or asent.centro == celda_seleccionada:
-						asent_t = asent.tipo
-						break
-				if (asent_t == "City" or asent_t == "Capital") and asentamiento_tiene_agua_dulce(celda_seleccionada):
+				var asent_t_ext: String = ReglasJuego.tipo_asentamiento_de_celda(celda_seleccionada, asentamientos, asentamiento_activo_idx)
+				if (asent_t_ext == "City" or asent_t_ext == "Capital") and asentamiento_tiene_agua_dulce(celda_seleccionada):
 					e_yields["Happiness"] = 3 * era_mult
 			elif not ReglasJuego.es_edificio_muralla(edif):
 				var d_e = Constantes.DATOS_EDIFICIOS.get(edif, {})
@@ -2300,6 +2448,144 @@ func actualizar_panel_ui():
 		
 	# Actualizar el recuento flotante de mejoras permitidas
 	actualizar_panel_recuento_mejoras()
+
+# ==============================================================================
+# ESPECIALISTAS (mecánica Civ VII): asignación por celda y recálculo
+# ==============================================================================
+# Los especialistas viven en cada celda urbana (especialistas_asignados, de 0 a
+# limite_especialistas). Esta es la ÚNICA puerta de entrada para cambiarlos
+# desde la UI: los botones [+]/[-] de la fila ESPECIALISTAS llaman aquí con
+# delta +1/-1. Se respeta el intervalo [0, limite], se sincroniza el límite por
+# si han cambiado los edificios y se refrescan los rendimientos llamando a
+# actualizar_panel_ui() (caja de la celda, que además repinta el panel de
+# totales del asentamiento) y actualizar_panel_gestion_ui(), además de guardar
+# la partida.
+# ------------------------------------------------------------------------------
+# FILA DE ESPECIALISTAS DEL PANEL DE INFORMACIÓN DE LA CELDA
+# ------------------------------------------------------------------------------
+# ÚNICO sitio del juego donde se pinta la UI de especialistas: el panel que
+# muestra los rendimientos de la casilla seleccionada, JUSTO DEBAJO de su caja
+# de rendimientos. El panel de construcción está blindado contra ella (ver
+# actualizar_panel_construccion): los especialistas NO se construyen, se asignan
+# con [+] / [-] desde aquí.
+#   * Solo se muestra donde la regla lo permite: celda urbana propia con AL
+#     MENOS UN edificio real (1 o 2; ni murallas ni maravillas desbloquean) de
+#     una Ciudad o Capital; en los pueblos no puede haber especialistas.
+#   * El cupo se calcula con la regla (no se lee del guardado), así nunca queda
+#     desfasado. X = asignados, Y = cupo de esta celda.
+# ------------------------------------------------------------------------------
+func _crear_fila_especialistas_celda(dyn_node: Node, coord: Vector2i, d: Dictionary, tipo_asent_celda: String, es_urbano: bool, es_pincel: bool) -> void:
+	if dyn_node == null or d == null:
+		return
+	# PUEBLOS: la UI de especialistas (el texto y los botones [+] y [-]) se oculta
+	# por completo. En los Towns no hay interacción activa con especialistas: los
+	# que hubiera quedan en LETARGO y despiertan al promocionar el Pueblo a Ciudad.
+	# VALIDACIÓN VISUAL ESTRICTA para el PanelInfoCelda (actualizar_panel_ui):
+	# si la celda pertenece a un asentamiento de tipo "Town", el nodo contenedor
+	# de especialistas se OCULTA explícitamente con .hide() además de no crearse,
+	# por si quedara visible de un repintado anterior.
+	if not Constantes.ESPECIALISTAS_TIPOS_ASENTAMIENTO.has(tipo_asent_celda):
+		# Se recorren los hijos por PREFIJO: si hubo dos repintados en el mismo
+		# frame, Godot renombra el nodo duplicado y una búsqueda por nombre
+		# exacto se lo perdería.
+		for hijo in dyn_node.get_children():
+			if str(hijo.name).begins_with(Constantes.NODO_FILA_ESPECIALISTAS):
+				hijo.hide()
+				dyn_node.remove_child(hijo)
+				hijo.queue_free()
+		return
+	var limite_esp: int = ReglasJuego.limite_especialistas_celda(d, tipo_asent_celda)
+	if not es_urbano or limite_esp <= 0 or es_pincel:
+		return
+	var asignados_esp: int = int(d.get("especialistas_asignados", 0))
+	var esp_en_letargo: bool = ReglasJuego.especialistas_en_letargo_celda(d, tipo_asent_celda, coord, era_actual, city_grid)
+	var panel_esp = PanelContainer.new()
+	panel_esp.name = Constantes.NODO_FILA_ESPECIALISTAS
+	panel_esp.tooltip_text = "Especialistas de la celda: se asignan aquí, en el panel de información (no son elementos construibles)."
+	var sb_esp = StyleBoxFlat.new()
+	sb_esp.bg_color = Color(0.16, 0.14, 0.08)
+	sb_esp.border_color = Color(0.75, 0.6, 0.2)
+	sb_esp.set_border_width_all(1)
+	sb_esp.set_corner_radius_all(6)
+	panel_esp.add_theme_stylebox_override("panel", sb_esp)
+	var margen_esp = MarginContainer.new()
+	margen_esp.add_theme_constant_override("margin_left", 6)
+	margen_esp.add_theme_constant_override("margin_right", 6)
+	margen_esp.add_theme_constant_override("margin_top", 2)
+	margen_esp.add_theme_constant_override("margin_bottom", 2)
+	var hbox_esp = HBoxContainer.new()
+	hbox_esp.alignment = BoxContainer.ALIGNMENT_CENTER
+	hbox_esp.add_theme_constant_override("separation", 8)
+	var lbl_esp = Label.new()
+	var texto_esp := "ESPECIALISTAS %d/%d" % [asignados_esp, limite_esp]
+	if esp_en_letargo and asignados_esp > 0:
+		texto_esp += " (LETARGO)"
+	lbl_esp.text = texto_esp
+	lbl_esp.tooltip_text = "Cupo de la celda: cada edificio real aporta 1 y el distrito suma +1 (ningún edificio concreto lo desbloquea; ni murallas ni maravillas tienen especialistas asociados). Solo hay especialistas en celdas con al menos un edificio de una Ciudad o Capital; en los pueblos no puede haber." \
+		+ (" Están EN LETARGO (pueblo, edificio obsoleto o almacén): no rinden y consumen -1 Alimento y -1 Felicidad cada uno." if (esp_en_letargo and asignados_esp > 0) else "")
+	lbl_esp.add_theme_font_size_override("font_size", 14)
+	lbl_esp.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+	hbox_esp.add_child(lbl_esp)
+	var coord_esp: Vector2i = coord
+	var btn_esp_mas = Button.new()
+	btn_esp_mas.text = "[+]"
+	btn_esp_mas.tooltip_text = "Asignar un especialista (consume Alimento y Felicidad según políticas)"
+	btn_esp_mas.custom_minimum_size = Vector2(36, 26)
+	btn_esp_mas.pressed.connect(func(): _cambiar_especialistas_celda(coord_esp, 1))
+	hbox_esp.add_child(btn_esp_mas)
+	var btn_esp_menos = Button.new()
+	btn_esp_menos.text = "[-]"
+	btn_esp_menos.tooltip_text = "Retirar un especialista de esta celda"
+	btn_esp_menos.custom_minimum_size = Vector2(36, 26)
+	btn_esp_menos.pressed.connect(func(): _cambiar_especialistas_celda(coord_esp, -1))
+	hbox_esp.add_child(btn_esp_menos)
+	margen_esp.add_child(hbox_esp)
+	panel_esp.add_child(margen_esp)
+	dyn_node.add_child(panel_esp)
+
+# Blindaje de los paneles que listan elementos construibles: retira la fila de
+# especialistas si alguna vez quedara colgada de ellos. La UI de especialistas
+# pertenece en exclusiva al panel de información de la celda.
+func _retirar_fila_especialistas(raiz: Node) -> void:
+	if raiz == null:
+		return
+	# Búsqueda por PREFIJO (no por nombre exacto): un segundo repintado en el
+	# mismo frame renombra el nodo duplicado y una búsqueda exacta se lo
+	# perdería.
+	for hijo in raiz.get_children():
+		if not str(hijo.name).begins_with(Constantes.NODO_FILA_ESPECIALISTAS):
+			continue
+		# Fuera del árbol ya mismo (queue_free() solo libera al final del frame,
+		# así que el nodo seguiría localizable) y liberada acto seguido.
+		raiz.remove_child(hijo)
+		hijo.queue_free()
+
+func _cambiar_especialistas_celda(coord: Vector2i, delta: int) -> void:
+	if not city_grid.has(coord):
+		return
+	var datos: Dictionary = city_grid[coord]
+	# El cupo puede haber cambiado con los edificios de la celda o con el tipo de
+	# asentamiento, así que se sincroniza antes de aplicar el delta para que
+	# [+]/[-] nunca se salgan del cupo real.
+	var tipo_asent: String = ReglasJuego.tipo_asentamiento_de_celda(coord, asentamientos, asentamiento_activo_idx)
+	# PUEBLOS: no hay interacción con especialistas (la fila del panel está
+	# oculta). Se corta aquí para que ninguna llamada pueda retirar los que están
+	# en letargo: solo despiertan al promocionar el Pueblo a Ciudad.
+	if not Constantes.ESPECIALISTAS_TIPOS_ASENTAMIENTO.has(tipo_asent):
+		return
+	ReglasJuego.sincronizar_especialistas_celda(datos, tipo_asent)
+	var limite: int = int(datos["limite_especialistas"])
+	var actuales: int = int(datos.get("especialistas_asignados", 0))
+	actuales = clampi(actuales + delta, 0, limite)
+	datos["especialistas_asignados"] = actuales
+	# Enlace con el recálculo de rendimientos: refresca la caja de la celda y
+	# los totales del asentamiento, redibuja el mapa y persiste el cambio.
+	actualizar_panel_ui()
+	actualizar_panel_gestion_ui()
+	actualizar_iconos_todos()
+	guardar_partida_actual()
+	queue_redraw()
+
 
 func actualizar_panel_recuento_mejoras():
 	var canvas_mejoras = get_node_or_null("CanvasMejoras")
@@ -2445,6 +2731,65 @@ func actualizar_panel_recuento_mejoras():
 				for wk in w_yields.keys():
 					if total_yields.has(wk): total_yields[wk] += w_yields[wk]
 					
+	# --- ESPECIALISTAS DEL ASENTAMIENTO (mecánica Civ VII) ---
+	# Bloque FUERA del bucle de celdas: se recorre el asentamiento UNA sola vez
+	# (dentro del bucle de rendimientos por celda se duplicaría). Se separan en:
+	#   * ACTIVOS: multiplican la adyacencia de los edificios activos de su celda
+	#     (+50% por especialista), consumen -2 Alimento y reciben los bonos de
+	#     Ethics/Scholars (función centralizada de más abajo).
+	#   * EN LETARGO (pueblo, edificio obsoleto o almacén: ver
+	#     ReglasJuego.especialistas_en_letargo_celda): no rinden NADA ni reciben
+	#     bonos de políticas; solo consumen -1 Alimento y -1 Felicidad cada uno.
+	var tipo_asent_actual: String = str(asent.get("tipo", "Town"))
+	var esp_activos: int = 0
+	var esp_letargo: int = 0
+	for coord_esp in celdas_asent:
+		if not city_grid.has(coord_esp):
+			continue
+		var d_esp: Dictionary = city_grid[coord_esp]
+		var n_esp: int = int(d_esp.get("especialistas_asignados", 0))
+		if n_esp <= 0:
+			continue
+		if ReglasJuego.especialistas_en_letargo_celda(d_esp, tipo_asent_actual, coord_esp, era_actual, city_grid):
+			esp_letargo += n_esp
+			total_yields["Food"] = int(total_yields.get("Food", 0)) + Constantes.ESPECIALISTAS_LETARGO_ALIMENTO * n_esp
+			total_yields["Happiness"] = int(total_yields.get("Happiness", 0)) + Constantes.ESPECIALISTAS_LETARGO_FELICIDAD * n_esp
+			continue
+		esp_activos += n_esp
+		var ady_extra_asent := 0.0
+		var rend_esp_asent := ""
+		for edif_esp in d_esp.get("edificios", []):
+			if edif_esp == "Palace" or edif_esp == "Town Hall":
+				continue
+			if Constantes.DATOS_EDIFICIOS.has(edif_esp) and not ReglasJuego.es_edificio_obsoleto(edif_esp, coord_esp, era_actual, city_grid):
+				ady_extra_asent += float(ReglasJuego.calcular_bono_edificio(coord_esp, edif_esp, era_actual, city_grid)) * Constantes.ESPECIALISTAS_BONO_ADYACENCIA * float(n_esp)
+				if rend_esp_asent == "":
+					rend_esp_asent = str(Constantes.DATOS_EDIFICIOS.get(edif_esp, {}).get("rendimiento", ""))
+		if rend_esp_asent != "" and total_yields.has(rend_esp_asent):
+			total_yields[rend_esp_asent] = int(total_yields[rend_esp_asent]) + int(round(ady_extra_asent))
+		total_yields["Food"] = int(total_yields.get("Food", 0)) + Constantes.ESPECIALISTAS_ALIMENTO_MANTENIMIENTO * n_esp
+	var num_esp_asent: int = esp_activos + esp_letargo
+	# --- BONOS DE POLÍTICAS Y TRADICIONES (función centralizada) ---
+	# Intercepta el total del asentamiento ANTES de pintarlo y una sola vez:
+	# aplicarlo por celda multiplicaría los bonos por el nº de celdas.
+	var politicas_asent: Array = GestorPoliticas.politicas_y_tradiciones_activas(era_actual, politicas_activas, tradiciones_activas)
+	var edificios_asent: Array = []
+	for coord_bono in celdas_asent:
+		if city_grid.has(coord_bono):
+			for edif_bono in city_grid[coord_bono].get("edificios", []):
+				if not edificios_asent.has(edif_bono):
+					edificios_asent.append(edif_bono)
+	ReglasJuego.aplicar_bonos_politicas(total_yields, politicas_asent, tipo_asent_actual, esp_activos, edificios_asent)
+	# Volcado del total en el propio panel nada más interceptarlo con las
+	# políticas: sirve para depurar y es el punto de comprobación de las pruebas
+	# (mismo patrón que los set_meta() de los modales). Refleja los rendimientos
+	# tras especialistas y políticas, justo antes de sumar las maravillas.
+	panel.set_meta("total_yields", total_yields.duplicate(true))
+	panel.set_meta("especialistas", num_esp_asent)
+	panel.set_meta("especialistas_activos", esp_activos)
+	panel.set_meta("especialistas_letargo", esp_letargo)
+
+
 	# Base y bonos especiales de maravillas, calculados solo con el grid propio.
 	var grid_rendimientos: Dictionary = grid_asent
 	if grid_rendimientos.is_empty():
@@ -2503,6 +2848,20 @@ func actualizar_panel_recuento_mejoras():
 		if hb_y_row2.get_child_count() > 0:
 			vbox_yields.add_child(hb_y_row2)
 		vbox.add_child(vbox_yields)
+
+	# Nº de especialistas del asentamiento: solo los ACTIVOS activan los bonos de
+	# Ethics y Scholars, así que se muestran —junto a los que están en letargo,
+	# que siguen costando mantenimiento— justo bajo el total de rendimientos.
+	if num_esp_asent > 0:
+		var lbl_esp_total = Label.new()
+		var texto_esp_total := "ESPECIALISTAS: %d" % num_esp_asent
+		if esp_letargo > 0:
+			texto_esp_total += " (%d en letargo)" % esp_letargo
+		lbl_esp_total.text = texto_esp_total
+		lbl_esp_total.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_esp_total.add_theme_font_size_override("font_size", 12)
+		lbl_esp_total.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+		vbox.add_child(lbl_esp_total)
 	
 	if improved_resources.size() > 0:
 		var hb_res = HBoxContainer.new()
@@ -2572,7 +2931,7 @@ func actualizar_panel_recuento_mejoras():
 			# Las maravillas solo admiten Expedition Base en este recuento.
 			if mej_colocada == MaravillasNaturales.MEJORA_ACTIVACION:
 				conteo_construidas[MaravillasNaturales.MEJORA_ACTIVACION] += 1
-			elif ReglasJuego.es_mejora_valida(coord, MaravillasNaturales.MEJORA_ACTIVACION, asent_centro, city_grid, era_actual, civ_actual, asent_tipo):
+			elif ReglasJuego.es_mejora_valida(coord, MaravillasNaturales.MEJORA_ACTIVACION, asent_centro, city_grid, era_actual, civ_actual, asent_tipo, civ_sincretismo):
 				conteo_disponibles[MaravillasNaturales.MEJORA_ACTIVACION] += 1
 			continue
 
@@ -2586,7 +2945,7 @@ func actualizar_panel_recuento_mejoras():
 			if recurso_celda != "" and not es_mejora_compatible_con_recurso(mej_nombre, recurso_celda, era_actual):
 				continue
 			
-			if ReglasJuego.es_mejora_valida(coord, mej_nombre, asent_centro, city_grid, era_actual, civ_actual, asent_tipo):
+			if ReglasJuego.es_mejora_valida(coord, mej_nombre, asent_centro, city_grid, era_actual, civ_actual, asent_tipo, civ_sincretismo):
 				conteo_disponibles[mej_nombre] += 1
 				
 	var hb_imp_headers = HBoxContainer.new()
@@ -3079,6 +3438,41 @@ func _draw() -> void:
 					draw_line(centro, centro_n, Color(0.15, 0.55, 0.95), 16.0, true)
 		if not tiene_vecino_nav: draw_circle(centro, 12.0, Color(0.15, 0.55, 0.95))
 
+# Superpone el aviso de obsolescencia (⚠️) sobre el arte original de un sello de
+# edificio. El nodo hijo queda anclado al borde inferior del contenedor y se
+# dimensiona a escala (42% del sello, entre 10 y 16 px) para no tapar el icono:
+# el edificio caducado conserva SIEMPRE su icono original.
+func _anadir_overlay_obsoleto(contenedor_padre: Control, tam_icono: float) -> void:
+	var tam_warn = clampf(tam_icono * 0.42, 10.0, 16.0)
+	var path_warning = resolver_ruta_asset("warning")
+	var overlay: Control = null
+	if path_warning != "" and ResourceLoader.exists(path_warning):
+		var tex_warn = TextureRect.new()
+		tex_warn.texture = load(path_warning)
+		tex_warn.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex_warn.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		overlay = tex_warn
+	else:
+		var lbl_warn = Label.new()
+		lbl_warn.text = "⚠️"
+		lbl_warn.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		lbl_warn.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		lbl_warn.add_theme_font_size_override("font_size", int(tam_warn))
+		overlay = lbl_warn
+	overlay.name = "OverlayObsoleto"
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.tooltip_text = "Obsolete"
+	# Anclaje al centro del borde inferior del sello (anchors + offsets).
+	overlay.anchor_left = 0.5
+	overlay.anchor_right = 0.5
+	overlay.anchor_top = 1.0
+	overlay.anchor_bottom = 1.0
+	overlay.offset_left = -tam_warn * 0.5
+	overlay.offset_right = tam_warn * 0.5
+	overlay.offset_top = -tam_warn
+	overlay.offset_bottom = 0.0
+	contenedor_padre.add_child(overlay)
+
 func actualizar_icono_celda(coord: Vector2i):
 	if not city_grid.has(coord): return
 	var datos = city_grid[coord]
@@ -3147,7 +3541,9 @@ func actualizar_icono_celda(coord: Vector2i):
 	if is_instance_valid(datos.get("nodo_terreno")):
 		datos.nodo_terreno.visible = true
 	
-	var anadir_elemento_visual = func(container: Control, asset_name: String, nombre_fallback: String, tam_minimo: float, texto_visible: bool = true, tam_fuente: float = 12.0):
+	# Crea el nodo visual de un icono y lo devuelve para poder decorarlo después
+	# (por ejemplo, superponiendo el aviso de obsolescencia sobre el sello).
+	var anadir_elemento_visual = func(container: Control, asset_name: String, nombre_fallback: String, tam_minimo: float, texto_visible: bool = true, tam_fuente: float = 12.0) -> Control:
 		var path = ""
 		if asset_name != "": path = resolver_ruta_asset(asset_name)
 		if path != "" and ResourceLoader.exists(path):
@@ -3157,12 +3553,15 @@ func actualizar_icono_celda(coord: Vector2i):
 			texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 			texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 			container.add_child(texture_rect)
+			return texture_rect
 		elif texto_visible:
 			var lbl = Label.new()
 			lbl.text = nombre_fallback
 			lbl.add_theme_font_size_override("font_size", int(tam_fuente))
 			lbl.add_theme_color_override("font_color", Color.WHITE)
 			container.add_child(lbl)
+			return lbl
+		return null
 
 	if datos.get("recurso", "") != "" and datos.mejora_tipo == "":
 		anadir_elemento_visual.call(datos.nodo_recurso, datos.recurso, datos.recurso, 24.0, true)
@@ -3215,33 +3614,49 @@ func actualizar_icono_celda(coord: Vector2i):
 		datos.nodo_icono.position = centro_px - Vector2(ancho_total * 0.5, alto_total * 0.5)
 		
 		for edif in edificios_visibles:
-			if ReglasJuego.es_edificio_obsoleto(edif, coord, era_actual, city_grid):
-				anadir_elemento_visual.call(datos.nodo_icono, "warning", "⚠️ Obsolete", size_edif, true)
-			else:
-				var asset_name = edif
-				var es_maravilla = Constantes.DATOS_EDIFICIOS.get(edif, {}).get("is_wonder", false)
-				var es_maravilla_natural = Constantes.MARAVILLAS_NATURALES.has(edif)
-				
-				if edif == "Palace" or edif == "Town Hall": asset_name = "palace" if edif == "Palace" else "city_hall"
-				elif es_maravilla and not ResourceLoader.exists(resolver_ruta_asset(asset_name)): asset_name = "wonder"
-					
-				if es_maravilla_natural:
-					var path = resolver_ruta_asset(asset_name)
-					if path != "" and ResourceLoader.exists(path):
-						datos.nodo_icono.position = centro_px - Vector2(42, 48)
-						datos.nodo_icono.custom_minimum_size = Vector2(84, 96)
-						datos.nodo_icono.clip_contents = true
-						var texture_rect = TextureRect.new()
-						texture_rect.texture = load(path)
-						texture_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
-						texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-						texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-						texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-						datos.nodo_icono.add_child(texture_rect)
-					else:
-						anadir_elemento_visual.call(datos.nodo_icono, asset_name, edif, size_edif, true)
+			# Un edificio obsoleto NO se sustituye por el aviso: conserva su arte
+			# original y el ⚠️ se superpone como nodo hijo (OverlayObsoleto)
+			# anclado al borde inferior del sello.
+			var es_obsoleto = ReglasJuego.es_edificio_obsoleto(edif, coord, era_actual, city_grid)
+			var asset_name = edif
+			var es_maravilla = Constantes.DATOS_EDIFICIOS.get(edif, {}).get("is_wonder", false)
+			var es_maravilla_natural = Constantes.MARAVILLAS_NATURALES.has(edif)
+
+			if edif == "Palace" or edif == "Town Hall": asset_name = "palace" if edif == "Palace" else "city_hall"
+			elif es_maravilla and not ResourceLoader.exists(resolver_ruta_asset(asset_name)): asset_name = "wonder"
+
+			if es_obsoleto:
+				# Contenedor del sello: arte original a pantalla completa + overlay ⚠️.
+				var sello_obsoleto = Control.new()
+				sello_obsoleto.custom_minimum_size = Vector2(size_edif, size_edif)
+				sello_obsoleto.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				var icono_obsoleto = anadir_elemento_visual.call(sello_obsoleto, asset_name, edif, size_edif, true)
+				if is_instance_valid(icono_obsoleto):
+					icono_obsoleto.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+					if icono_obsoleto is Label:
+						icono_obsoleto.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+						icono_obsoleto.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+					icono_obsoleto.tooltip_text = edif + " (obsolete)"
+				_anadir_overlay_obsoleto(sello_obsoleto, size_edif)
+				datos.nodo_icono.add_child(sello_obsoleto)
+			elif es_maravilla_natural:
+				# Las maravillas naturales conservan su arte a sangre sobre la celda.
+				var path = resolver_ruta_asset(asset_name)
+				if path != "" and ResourceLoader.exists(path):
+					datos.nodo_icono.position = centro_px - Vector2(42, 48)
+					datos.nodo_icono.custom_minimum_size = Vector2(84, 96)
+					datos.nodo_icono.clip_contents = true
+					var texture_rect = TextureRect.new()
+					texture_rect.texture = load(path)
+					texture_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+					texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+					texture_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+					texture_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+					datos.nodo_icono.add_child(texture_rect)
 				else:
 					anadir_elemento_visual.call(datos.nodo_icono, asset_name, edif, size_edif, true)
+			else:
+				anadir_elemento_visual.call(datos.nodo_icono, asset_name, edif, size_edif, true)
 	# Las mejoras no se pintan en el mapa con el visor de pincel activo.
 	elif datos.mejora_tipo != "" and seccion_actual != "PINCEL":
 		datos.nodo_icono.columns = 1
@@ -3297,42 +3712,50 @@ func actualizar_icono_celda(coord: Vector2i):
 		datos.nodo_icono.add_child(vbox_link)
 		
 	elif seccion_actual == "CONSTRUCCION":
+		# Aconsejador de rendimientos: la caché llega ordenada de mayor a menor
+		# adyacencia, así que solo hay que traducir cada entrada a su icono de
+		# rendimiento (uno por rendimiento y celda, sin duplicados). Los iconos
+		# se agrupan en un HBoxContainer centrado en la ZONA SUPERIOR de la
+		# celda (alineación Top), con tamaño reducido para que quepan 4-5 en
+		# una sola fila sin tapar el centro de la casilla.
 		if sugerencias_cache.has(coord):
 			var iconos_agregados = {}
-			var lista_sug_validas = []
+			var iconos_sug = []
 			for sug in sugerencias_cache[coord]:
-				var d_sug = Constantes.DATOS_EDIFICIOS.get(sug.edificio, {})
-				var asset_sug = ""
-				
-				# Las maravillas y los almacenes utilizan el icono "wonder" para resaltarse en el mapa
-				if d_sug.get("is_wonder", false) or d_sug.get("tipo", "") == "Warehouse":
-					asset_sug = "wonder"
-				else:
-					asset_sug = obtener_nombre_asset_rendimiento(d_sug.get("rendimiento", ""))
-					
-				if not iconos_agregados.has(asset_sug) and asset_sug != "":
-					lista_sug_validas.append(asset_sug)
-					iconos_agregados[asset_sug] = true
-			
-			if lista_sug_validas.size() > 0:
-				var num = lista_sug_validas.size()
-				var tam_icono = 16.0
-				var h_sep = 2.0
-				var v_sep = 2.0
-				var cols = min(num, 2)
-				var rows = int(ceil(float(num) / 2.0))
-				
-				var ancho_total = (cols * tam_icono) + ((cols - 1) * h_sep)
-				var alto_total = (rows * tam_icono) + ((rows - 1) * v_sep)
-				
-				datos.nodo_icono.columns = 2
-				datos.nodo_icono.add_theme_constant_override("h_separation", int(h_sep))
-				datos.nodo_icono.add_theme_constant_override("v_separation", int(v_sep))
-				datos.nodo_icono.custom_minimum_size = Vector2(ancho_total, alto_total)
-				datos.nodo_icono.position = centro_px - Vector2(ancho_total * 0.5, alto_total * 0.5)
-				
-				for asset_sug in lista_sug_validas:
-					anadir_elemento_visual.call(datos.nodo_icono, asset_sug, "", tam_icono, false)
+				var rend_sug = str(sug.get("rendimiento", ""))
+				var asset_sug = obtener_nombre_asset_rendimiento(rend_sug)
+				if asset_sug == "" or iconos_agregados.has(asset_sug): continue
+				iconos_agregados[asset_sug] = true
+				iconos_sug.append(asset_sug)
+
+			if iconos_sug.size() > 0:
+				var num = iconos_sug.size()
+				# Fila única en la banda superior: ancho útil del hexágono
+				# (pointy-top) donde la celda conserva su ancho pleno.
+				var ancho_util = radio_hex * 1.7
+				var sep = 2.0
+				var tam_icono = clampf((ancho_util - (num - 1) * sep) / num, 8.0, 14.0)
+				var ancho_total = num * tam_icono + (num - 1) * sep
+
+				var hbox_sug = HBoxContainer.new()
+				hbox_sug.alignment = BoxContainer.ALIGNMENT_CENTER
+				hbox_sug.add_theme_constant_override("separation", int(sep))
+				hbox_sug.custom_minimum_size = Vector2(ancho_total, tam_icono)
+				hbox_sug.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+				for asset_sug in iconos_sug:
+					var icono_sug = anadir_elemento_visual.call(hbox_sug, asset_sug, "", tam_icono, false)
+					if is_instance_valid(icono_sug): icono_sug.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+				# Contenedor de una sola columna anclado arriba (Top) y centrado.
+				datos.nodo_icono.columns = 1
+				datos.nodo_icono.add_theme_constant_override("h_separation", 0)
+				datos.nodo_icono.add_theme_constant_override("v_separation", 0)
+				datos.nodo_icono.custom_minimum_size = Vector2(ancho_total, tam_icono)
+				datos.nodo_icono.position = Vector2(centro_px.x - ancho_total * 0.5, centro_px.y - radio_hex * 0.5)
+				datos.nodo_icono.size = Vector2(ancho_total, tam_icono)
+				datos.nodo_icono.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				datos.nodo_icono.add_child(hbox_sug)
 
 func actualizar_iconos_todos():
 	cache_puentes_urbanos = _calcular_celdas_puente_requeridas()
@@ -4144,19 +4567,71 @@ class ReglasJuego:
 	static func es_edificio_muralla(nombre: String) -> bool:
 		return nombre in ["Ancient Walls", "Medieval Walls", "Modern Walls"]
 
-	static func es_edificio_obsoleto(nombre: String, coord: Vector2i, era_actual: String, city_grid: Dictionary) -> bool:
-		if city_grid.has(coord) and city_grid[coord].get("edificios_dorados", []).has(nombre): return false
+	# Puentes (Ancient/Medieval/Modern Bridge): ocupan toda la celda
+	# (ocupación exclusiva) y no tienen límite de cantidad por asentamiento.
+	static func es_edificio_puente(nombre: String) -> bool:
+		return nombre in ["Ancient Bridge", "Medieval Bridge", "Modern Bridge"]
+
+	# --------------------------------------------------------------------------
+	# ¿Es un elemento CONSTRUIBLE? Solo lo son los que tienen datos de edificio o
+	# de mejora en Constantes. Los pseudo-elementos de CELDA (la fila de
+	# ESPECIALISTAS y compañía: Constantes.ELEMENTOS_NO_CONSTRUIBLES) NO se
+	# construyen: se asignan con [+] / [-] en el panel de información de la celda.
+	# Es el filtro único que aplican el panel de construcción, el panel de
+	# externos y el aconsejador de rendimientos antes de listar o recomendar algo.
+	# --------------------------------------------------------------------------
+	static func es_construible(nombre: String) -> bool:
+		var limpio := str(nombre).strip_edges()
+		if limpio == "":
+			return false
+		if limpio.to_lower() in Constantes.ELEMENTOS_NO_CONSTRUIBLES:
+			return false
+		return Constantes.DATOS_EDIFICIOS.has(limpio) or Constantes.DATOS_MEJORAS.has(limpio)
+
+	# Un edificio ya construido se oculta del menú de construcción, salvo:
+	#  * Maravillas: irrepetibles (se ocultan por eso, no por límite).
+	#  * Murallas: upgrade por era, se reemplazan entre sí.
+	#  * Puentes: sin límite; caben tantos como celdas de río navegable.
+	static func se_oculta_por_ya_construido(nombre: String, ya_construidos: Dictionary) -> bool:
+		if not ya_construidos.has(nombre): return false
+		if Constantes.DATOS_EDIFICIOS.get(nombre, {}).get("is_wonder", false): return false
+		if es_edificio_muralla(nombre): return false
+		if es_edificio_puente(nombre): return false
+		return true
+
+	# Una Maravilla Construible solo puede borrarse con el [X] mientras dura la
+	# era a la que corresponden (dato "era" == era actual). Pasada esa era
+	# queda como hito permanente del mapa: no se elimina ni se sobreconstruye.
+	# Devuelve false si no es una maravilla: esta regla solo aplica a ellas.
+	static func es_maravilla_borrable_en_era(nombre: String, era_actual: String) -> bool:
 		if not Constantes.DATOS_EDIFICIOS.has(nombre): return false
 		var d = Constantes.DATOS_EDIFICIOS[nombre]
+		if not d.get("is_wonder", false): return false
+		var era_maravilla = str(d.get("era", "All"))
+		return era_maravilla == "All" or era_maravilla == era_actual
+
+	# Excepciones de la transición de era (mantienen rendimientos y adyacencias):
+	#   * Maravillas construibles: nunca caducan mientras existan sobre el mapa.
+	#   * Murallas (Ancient/Medieval/Modern Walls): solo desaparecen si el jugador
+	#     las sobreconstruye con la muralla de la era siguiente (upgrade).
+	#   * Almacenes (tipo "Warehouse"): rendimientos permanentes.
+	#   * Academy y Amphitheater marcados como Edad de Oro (edificios_dorados).
+	static func es_edificio_obsoleto(nombre: String, coord: Vector2i, era_actual: String, city_grid: Dictionary) -> bool:
+		if not Constantes.DATOS_EDIFICIOS.has(nombre): return false
+		var d = Constantes.DATOS_EDIFICIOS[nombre]
+
+		if d.get("is_wonder", false): return false
+		if es_edificio_muralla(nombre): return false
+		if nombre in ["Academy", "Amphitheater"] and city_grid.has(coord) and city_grid[coord].get("edificios_dorados", []).has(nombre): return false
+		if d.get("tipo", "") == "Warehouse": return false
 	
 		var era_edif = d.get("era", "All")
 		if era_edif == "All": return false
 		if Constantes.ORDEN_ERAS.get(era_edif, 0) >= Constantes.ORDEN_ERAS.get(era_actual, 0): return false
-		if d.get("tipo", "") == "Warehouse": return false
 	
 		return true
 
-	static func es_mejora_valida(coord: Vector2i, mejora_nombre: String, asent_centro: Vector2i, city_grid: Dictionary, era_actual: String = "Antiquity", civ_actual: String = "None", tipo_asentamiento: String = "Town") -> bool:
+	static func es_mejora_valida(coord: Vector2i, mejora_nombre: String, asent_centro: Vector2i, city_grid: Dictionary, era_actual: String = "Antiquity", civ_actual: String = "None", tipo_asentamiento: String = "Town", civ_sincretismo: String = "None") -> bool:
 		if not city_grid.has(coord): return false
 		if city_grid[coord].get("ajeno", false): return false
 
@@ -4175,8 +4650,16 @@ class ReglasJuego:
 
 		var t = datos.get("terreno", "").strip_edges().to_upper()
 	
-		if era_actual == "Antiquity" and t in ["MOUNTAINOUS", "MONTAÑA"]: 
-			return false
+		# Restricción de montaña: solo Terrace Farm (Incan) y Highland Power
+		# Station (Nepalese) pueden levantarse sobre terreno montañoso, y solo
+		# con esa civilización activa o mediante su sincretismo.
+		if t in ["MOUNTAINOUS", "MONTAÑA"]:
+			var es_montana_permitida := false
+			if mejora_nombre == "Terrace Farm" and (civ_actual == "Incan" or civ_sincretismo == "Incan"):
+				es_montana_permitida = true
+			elif mejora_nombre == "Highland Power Station" and (civ_actual in ["Nepal", "Nepalese"] or civ_sincretismo in ["Nepal", "Nepalese"]):
+				es_montana_permitida = true
+			if not es_montana_permitida: return false
 		
 		var b = datos.get("bioma", "").strip_edges().to_upper()
 		var f = datos.get("caracteristica", "NONE").strip_edges().to_upper()
@@ -4248,14 +4731,278 @@ class ReglasJuego:
 			"Monastery": return distritos_adyacentes == 0
 			"Saqiya": return f == "FLOODPLAIN"
 			"Bang": return t in ["NAVIGABLE_RIVER", "RIO_NAVEGABLE"]
-			"Highland Power Station": return f == "NONE" or (t in ["MOUNTAINOUS", "MONTAÑA"] and civ_actual == "Nepalese")
+			"Highland Power Station": return f == "NONE" or (t in ["MOUNTAINOUS", "MONTAÑA"] and (civ_actual in ["Nepal", "Nepalese"] or civ_sincretismo in ["Nepal", "Nepalese"]))
 			"Kabakas Lake", "Open-Air Museum": return t in ["FLAT", "PLANO"]
 			"Obshchina": return adyacentes_misma_mejora == 0
 			"Staatseisenbahn": return true
 			"Shore Battery": return b != "MARINE" and celdas_coastal_adyacentes > 0
 		return true
 
-	static func calcular_bono_edificio(coord: Vector2i, nombre_edificio: String, _era_actual: String, city_grid: Dictionary) -> int:
+	# Adyacencia que aportaría un edificio en una celda. Con
+	# "ignorar_adyacencia_maravillas" se descarta el +1 por maravilla ya construida:
+	# es lo que exige el aconsejador de rendimientos para no recomendar celdas cuyo
+	# único bonus provenga de una maravilla levantada.
+	# --------------------------------------------------------------------------
+	# Tipo del asentamiento dueño de una celda: "Capital", "City" o "Town".
+	# Se coincide porque la celda está en el grid del asentamiento o porque es su
+	# centro. Si ningún asentamiento la tiene se devuelve "Town": sin
+	# asentamiento claro la celda no es urbana y, por regla, no admite
+	# especialistas (opción conservadora).
+	# idx_activo (opcional): si la celda pertenece al asentamiento ACTIVO, manda
+	# su tipo. Los grids PUEDEN solaparse (los asentamientos se crean sobre el
+	# mismo territorio), así que sin este orden la primera fundación (la Capital)
+	# "secuestraría" el tipo de todas las celdas: la UI de especialistas de un
+	# Pueblo se pintaría como si fuera de la Capital y permitiría editarla.
+	# --------------------------------------------------------------------------
+	static func tipo_asentamiento_de_celda(coord: Vector2i, asentamientos: Array, idx_activo: int = -1) -> String:
+		if idx_activo >= 0 and idx_activo < asentamientos.size():
+			var asent_activo: Dictionary = asentamientos[idx_activo]
+			if asent_activo.get("grid", {}).has(coord) or asent_activo.get("centro", Vector2i(0, 0)) == coord:
+				return str(asent_activo.get("tipo", "Town"))
+		for asent in asentamientos:
+			if asent.get("grid", {}).has(coord) or asent.get("centro", Vector2i(0, 0)) == coord:
+				return str(asent.get("tipo", "Town"))
+		return "Town"
+
+	# --------------------------------------------------------------------------
+	# ESPECIALISTAS: cupo de especialistas que admite una celda.
+	# --------------------------------------------------------------------------
+	# Reglas (Civ VII), en este orden:
+	#   1) Celda urbana PROPIA: un edificio externo (ajeno) no aloja especialistas.
+	#   2) El desbloqueo NO depende de ningún edificio concreto: basta con que la
+	#      celda tenga UNO O DOS edificios construidos (>= 1) y cada edificio real
+	#      aporta 1 cupo. Ni las murallas ni las maravillas (construibles o
+	#      naturales) tienen especialistas asociados: no suman cupo y una celda
+	#      que solo las contiene no admite especialistas. El Palace y el Town
+	#      Hall (City Hall) cuentan como edificios y aportan su cupo.
+	#   3) Solo en Ciudades y Capitales (Constantes.ESPECIALISTAS_TIPOS_ASENTAMIENTO):
+	#      en los pueblos ("Town") no puede haber especialistas.
+	# Encima de eso, un distrito (2+ edificios normales o 1 de celda completa)
+	# añade +1. Palace y Town Hall no cuentan como edificio "normal" a efectos
+	# del +1 de distrito.
+	# --------------------------------------------------------------------------
+	static func limite_especialistas_celda(datos: Dictionary, tipo_asentamiento: String) -> int:
+		if bool(datos.get("ajeno", false)):
+			return 0
+		if not Constantes.ESPECIALISTAS_TIPOS_ASENTAMIENTO.has(tipo_asentamiento):
+			return 0
+		var edificios: Array = datos.get("edificios", [])
+		if edificios.is_empty():
+			return 0
+		var reales := 0
+		var normales := 0
+		var celda_completa := false
+		for edificio in edificios:
+			var info: Dictionary = Constantes.DATOS_EDIFICIOS.get(edificio, {})
+			# Murallas y maravillas (construibles o naturales): SIN especialistas
+			# asociados: no suman cupo y por sí solas no desbloquean la celda.
+			if es_edificio_muralla(edificio) or bool(info.get("is_wonder", false)) or Constantes.MARAVILLAS_NATURALES.has(edificio):
+				continue
+			reales += 1
+			if str(edificio) in ["Palace", "Town Hall"]:
+				continue
+			normales += 1
+			if bool(info.get("full_tile", false)) or str(edificio) in ["Aerodrome", "Rail Station"]:
+				celda_completa = true
+		# DESBLOQUEO POR CONTEO (>= 1 edificio real): ningún edificio concreto
+		# desbloquea especialistas; con UNO o DOS edificios en la celda basta.
+		# Cada edificio real aporta 1 cupo y el distrito suma +1 extra.
+		if reales == 0:
+			return 0
+		var limite := reales
+		if normales >= 2 or celda_completa:
+			limite += 1
+		return limite
+
+	# --------------------------------------------------------------------------
+	# Sincronizar el límite de especialistas de una celda con sus edificios y con
+	# el tipo de su asentamiento (`tipo_asentamiento`: "Capital", "City" o
+	# "Town"; en pueblos el cupo queda en 0).
+	# Única puerta de entrada tras CUALQUIER cambio en datos.edificios (colocar,
+	# borrar, sobreconstruir, edificio externo, reset, cambio de Era o carga de
+	# partida): recalcula limite_especialistas y deja los asignados dentro del
+	# cupo activo [0, limite].
+	# LETARGO (excepción): en un PUEBLO los especialistas NO se borran. El cupo es
+	# 0 (no se pueden asignar ni quitar con la UI) pero los que ya hubiera quedan
+	# DORMIDOS y despiertan solos al promocionar el Pueblo a Ciudad: ver
+	# especialistas_en_letargo_celda(). Las celdas externas (ajeno) sí se vacían:
+	# dejan de ser celdas propias del jugador.
+	# --------------------------------------------------------------------------
+	static func sincronizar_especialistas_celda(datos: Dictionary, tipo_asentamiento: String) -> void:
+		var limite := limite_especialistas_celda(datos, tipo_asentamiento)
+		datos["limite_especialistas"] = limite
+		var asignados := maxi(0, int(datos.get("especialistas_asignados", 0)))
+		if bool(datos.get("ajeno", false)):
+			asignados = 0
+		elif Constantes.ESPECIALISTAS_TIPOS_ASENTAMIENTO.has(tipo_asentamiento):
+			asignados = mini(asignados, limite)
+		datos["especialistas_asignados"] = asignados
+
+	# --------------------------------------------------------------------------
+	# LETARGO DE ESPECIALISTAS (mecánica Civ VII).
+	# --------------------------------------------------------------------------
+	# Un especialista duerme cuando la celda donde está ya no tiene
+	# infraestructura activa. CONDICIONES (basta con que se cumpla una):
+	#   1) El asentamiento es un Pueblo: la Ciudad fue degradada, la interacción
+	#      con especialistas queda cerrada y duermen hasta la próxima promoción.
+	#   2) La celda tiene AL MENOS UN edificio obsoleto (de una Era pasada).
+	#   3) La celda tiene un almacén (edificio con tipo "Warehouse").
+	# REACTIVACIÓN: automática y sin estado guardado. En cuanto dejan de cumplirse
+	# las condiciones (el Pueblo vuelve a ser Ciudad, o se sobreconstruye el
+	# edificio obsoleto/almacén con uno de la Era actual) los especialistas
+	# despiertan y recuperan sus bonos y sus costes de mantenimiento normales.
+	# Efecto en rendimientos: un especialista en letargo NO aporta adyacencia ni
+	# recibe bonos de políticas; solo consume -1 Alimento y -1 Felicidad
+	# (Constantes.ESPECIALISTAS_LETARGO_*). Lo aplican el panel de la celda y el
+	# recuento del asentamiento.
+	# --------------------------------------------------------------------------
+	static func especialistas_en_letargo_celda(datos: Dictionary, tipo_asentamiento: String, coord: Vector2i, era_actual: String, city_grid: Dictionary) -> bool:
+		if int(datos.get("especialistas_asignados", 0)) <= 0:
+			return false
+		# 1) Pueblo: la Ciudad fue degradada y la interacción está cerrada.
+		if not Constantes.ESPECIALISTAS_TIPOS_ASENTAMIENTO.has(tipo_asentamiento):
+			return true
+		for edificio in datos.get("edificios", []):
+			var info: Dictionary = Constantes.DATOS_EDIFICIOS.get(edificio, {})
+			# 3) Almacenes: el almacenamiento no sostiene trabajo especializado.
+			if str(info.get("tipo", "")) == "Warehouse":
+				return true
+			# 2) Edificios obsoletos (Palace/Town Hall y maravillas nunca lo son).
+			if es_edificio_obsoleto(str(edificio), coord, era_actual, city_grid):
+				return true
+		return false
+
+	# --------------------------------------------------------------------------
+	# JERARQUÍA DE ASENTAMIENTOS AL CAMBIAR DE ERA (regla estricta):
+	#   1) El asentamiento elegido por el jugador pasa a ser la nueva Capital.
+	#   2) La Capital de la Era anterior, si NO es la elegida, pasa a Ciudad: la
+	#      antigua Capital NUNCA se degrada a Pueblo.
+	#   3) El resto de asentamientos (incluidas las demás Ciudades) se degradan a
+	#      Pueblo.
+	# --------------------------------------------------------------------------
+	static func tipo_tras_cambio_de_era(idx: int, idx_nueva_capital: int, idx_capital_anterior: int) -> String:
+		if idx == idx_nueva_capital:
+			return "Capital"
+		if idx == idx_capital_anterior:
+			return "City"
+		return "Town"
+
+	# Índice del asentamiento que ostenta la Capitalidad (-1 si no hay ninguno).
+	static func indice_capital(asentamientos: Array) -> int:
+		for i in range(asentamientos.size()):
+			if str(asentamientos[i].get("tipo", "")) == "Capital":
+				return i
+		return -1
+
+	# --------------------------------------------------------------------------
+	# POLÍTICAS Y TRADICIONES ACTIVAS: modificadores matemáticos de rendimientos.
+	# --------------------------------------------------------------------------
+	# Punto único de consulta: devuelve true si la política/tradición está
+	# activa en la Era indicada (esté en politicas_activas o tradiciones_activas).
+	static func politica_activa(nombre: String, era: String, politicas: Dictionary, tradiciones: Dictionary) -> bool:
+		return politicas.get(era, []).has(nombre) or tradiciones.get(era, []).has(nombre)
+
+	# Especialistas activos en todo el grid de un asentamiento.
+	static func especialistas_activos_grid(grid: Dictionary) -> int:
+		var total := 0
+		for datos in grid.values():
+			total += int(datos.get("especialistas_asignados", 0))
+		return total
+
+	# --------------------------------------------------------------------------
+	# aplicar_bonos_politicas(): FUNCIÓN CENTRALIZADA de efectos de políticas.
+	# --------------------------------------------------------------------------
+	# Recorre TODAS las políticas/tradiciones activas de la Era y añade al
+	# diccionario `total` los bonos de la lista del Paso 2. Se invoca sobre el
+	# total de rendimientos del ASENTAMIENTO (actualizar_panel_recuento_mejoras,
+	# donde se suman los total_yields de cada ciudad/pueblo) ANTES de pintarlo y
+	# UNA sola vez por asentamiento: aplicarlo dentro del bucle de celdas
+	# multiplicaría los bonos por el número de celdas del territorio.
+	# Los efectos que dependen de los especialistas viven en
+	# aplicar_bonos_politicas_especialistas(), que además se llama desde la caja
+	# de rendimientos de la celda (actualizar_panel_ui) con sus propios
+	# especialistas.
+	# Parámetros:
+	#   total        : diccionario de rendimientos a modificar (Food, Production,
+	#                  Gold, Science, Culture, Happiness, Influence).
+	#   politicas    : políticas y tradiciones activas de la Era (nombres).
+	#   tipo_asent   : "Capital", "City" o "Town".
+	#   especialistas: nº de especialistas activos en el asentamiento.
+	#   edificios    : nombres de edificios del asentamiento (para Palace,
+	#                  edificios de cultura y de ciencia).
+	static func aplicar_bonos_politicas(total: Dictionary, politicas: Array, tipo_asent: String, especialistas: int, edificios: Array) -> void:
+		var es_ciudad: bool = tipo_asent == "City" or tipo_asent == "Capital"
+		var es_pueblo: bool = tipo_asent == "Town"
+		if politicas.has("Castes"):
+			total["Food"] = int(total.get("Food", 0)) + 2
+		if politicas.has("Priesthood"):
+			total["Gold"] = int(total.get("Gold", 0)) + 2
+		if politicas.has("Rites and Rituals"):
+			total["Happiness"] = int(total.get("Happiness", 0)) + 2
+		if politicas.has("Ancestor Worship"):
+			total["Happiness"] = int(total.get("Happiness", 0)) + 2
+		if politicas.has("Charismatic Leader") and edificios.has("Palace"):
+			total["Culture"] = int(total.get("Culture", 0)) + 2
+		if politicas.has("Tool Making") and edificios.has("Palace"):
+			total["Production"] = int(total.get("Production", 0)) + 1
+			total["Science"] = int(total.get("Science", 0)) + 1
+		if politicas.has("Sacred Kingship") and edificios.has("Palace"):
+			total["Production"] = int(total.get("Production", 0)) + 1
+		if politicas.has("Drama and Poetry"):
+			for edificio in edificios:
+				if _es_edificio_cultura(edificio):
+					total["Culture"] = int(total.get("Culture", 0)) + 2
+		if politicas.has("Literature"):
+			for edificio in edificios:
+				if _es_edificio_ciencia(edificio):
+					total["Science"] = int(total.get("Science", 0)) + 2
+		if politicas.has("Oral Tradition") and es_ciudad:
+			total["Culture"] = int(total.get("Culture", 0)) + 1
+		if politicas.has("Clan Feuds") and es_pueblo:
+			total["Gold"] = int(total.get("Gold", 0)) + 1
+		if politicas.has("Ethics") or politicas.has("Scholars"):
+			aplicar_bonos_politicas_especialistas(total, politicas, especialistas)
+
+	# --------------------------------------------------------------------------
+	# BONOS DE POLÍTICAS QUE DEPENDEN DE LOS ESPECIALISTAS (Ética / Eruditos).
+	# --------------------------------------------------------------------------
+	# +1 Cultura (Ethics) o +1 Ciencia (Scholars) por especialista activo, con
+	# -1 Felicidad por especialista en ambos casos: es el coste civismo de la
+	# mecanización del trabajo. Se aplica UNA vez por conjunto de especialistas:
+	#   * desde aplicar_bonos_politicas() con los del asentamiento completo,
+	#   * y desde la caja de rendimientos de la celda con los de ESA celda.
+	static func aplicar_bonos_politicas_especialistas(total: Dictionary, politicas: Array, especialistas: int) -> void:
+		if especialistas <= 0:
+			return
+		if politicas.has("Ethics"):
+			total["Culture"] = int(total.get("Culture", 0)) + especialistas
+			total["Happiness"] = int(total.get("Happiness", 0)) - especialistas
+		if politicas.has("Scholars"):
+			total["Science"] = int(total.get("Science", 0)) + especialistas
+			total["Happiness"] = int(total.get("Happiness", 0)) - especialistas
+
+	# ¿Es un edificio de cultura? (Drama and Poetry): por rendimiento "Culture"
+	# o por la lista de respaldo de Constantes.EDIFICIOS_CULTURA.
+	static func _es_edificio_cultura(nombre: String) -> bool:
+		var info: Dictionary = Constantes.DATOS_EDIFICIOS.get(nombre, {})
+		if str(info.get("rendimiento", "")) == "Culture":
+			return true
+		if str(info.get("rendimiento_secundario", "")) == "Culture":
+			return true
+		return str(nombre) in Constantes.EDIFICIOS_CULTURA
+
+	# ¿Es un edificio de ciencia? (Literature): por rendimiento "Science" o por
+	# la lista de respaldo de Constantes.EDIFICIOS_CIENCIA.
+	static func _es_edificio_ciencia(nombre: String) -> bool:
+		var info: Dictionary = Constantes.DATOS_EDIFICIOS.get(nombre, {})
+		if str(info.get("rendimiento", "")) == "Science":
+			return true
+		if str(info.get("rendimiento_secundario", "")) == "Science":
+			return true
+		return str(nombre) in Constantes.EDIFICIOS_CIENCIA
+
+
+	static func calcular_bono_edificio(coord: Vector2i, nombre_edificio: String, _era_actual: String, city_grid: Dictionary, ignorar_adyacencia_maravillas: bool = false) -> int:
 		if not Constantes.DATOS_EDIFICIOS.has(nombre_edificio): return 0
 		var d = Constantes.DATOS_EDIFICIOS[nombre_edificio]
 	
@@ -4272,10 +5019,14 @@ class ReglasJuego:
 				var t = vd.get("terreno", "").strip_edges().to_upper()
 				var c = vd.get("caracteristica", "NONE").strip_edges().to_upper()
 			
-				var is_wonder = false
-				for e in vd.edificios:
-					if Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false): is_wonder = true
-				if is_wonder: bonus += 1
+				# Adyacencia por maravilla construida: el aconsejador de rendimientos
+				# la ignora (ignorar_adyacencia_maravillas) para no recomendar celdas
+				# cuyo único bonus provenga de una maravilla ya levantada.
+				if not ignorar_adyacencia_maravillas:
+					for e in vd.edificios:
+						if Constantes.DATOS_EDIFICIOS.get(e, {}).get("is_wonder", false):
+							bonus += 1
+							break
 			
 				if rend == "Culture" or rend == "Happiness":
 					if t in ["MOUNTAINOUS", "MONTAÑA"] or t == "NATURAL_WONDER" or c == "NATURAL_WONDER": bonus += 1
@@ -4304,6 +5055,7 @@ class ReglasJuego:
 		var d = Constantes.DATOS_EDIFICIOS[edificio_nombre]
 		var es_nueva_wonder = d.get("is_wonder", false)
 		var es_nueva_muralla = es_edificio_muralla(edificio_nombre)
+		var es_puente_nuevo = es_edificio_puente(edificio_nombre)
 	
 		if es_nueva_wonder and tipo_asentamiento == "Town":
 			return false
@@ -4338,9 +5090,9 @@ class ReglasJuego:
 		var es_centro = edificios_actuales.has("Palace") or edificios_actuales.has("Town Hall")
 
 		var normales = 0
+		var normales_vivos = 0
 		var tiene_wonder = false
 		var tiene_muralla = false
-		var extraibles = 0
 
 		for e in edificios_actuales:
 			if es_edificio_muralla(e):
@@ -4349,36 +5101,58 @@ class ReglasJuego:
 				tiene_wonder = true
 			elif e not in ["Palace", "Town Hall"]:
 				normales += 1
-				var e_d = Constantes.DATOS_EDIFICIOS.get(e, {})
-				if e_d.get("tipo", "") != "Warehouse" and not e_d.has("civ"):
-					extraibles += 1
+				if not es_edificio_obsoleto(e, coord, era_actual, city_grid): normales_vivos += 1
+
+		# Excepción absoluta: sobre una celda que contiene una Maravilla
+		# Construible no se construye nada (ni murallas ni edificios).
+		if tiene_wonder and not es_nueva_wonder: return false
+
+		# Puentes: ocupación exclusiva. Un puente nuevo solo entra en una
+		# celda vacía o con otro puente (upgrade de era); nunca convive con
+		# otros edificios. A la inversa, cualquier edificio nuevo sustituye
+		# al puente: aplicar_edificio retira exactamente ese puente.
+		if es_puente_nuevo:
+			for e in edificios_actuales:
+				if not es_edificio_puente(e):
+					return false
 
 		if es_nueva_muralla:
-			if tiene_muralla: return false
-			var is_urban = normales > 0 or tiene_wonder or es_centro
-			if not is_urban: return false
+			# Sobreconstrucción (upgrade): la muralla de una era superior puede
+			# levantarse sobre la muralla de una era anterior y la sustituye. Nunca
+			# se duplica la misma muralla ni se "degrada" a una era ya superada.
+			var era_nueva_muralla = Constantes.ORDEN_ERAS.get(str(d.get("era", "All")), 0)
+			for e in edificios_actuales:
+				if es_edificio_muralla(e):
+					var era_muralla_existente = Constantes.ORDEN_ERAS.get(str(Constantes.DATOS_EDIFICIOS.get(e, {}).get("era", "All")), 0)
+					if era_muralla_existente >= era_nueva_muralla: return false
 
-			var dist = HexMath.dist_hex(coord, asent_centro)
-			if dist > 0:
-				var tiene_vecino_con_muralla = false
-				for vec in HexMath.VECINOS_HEX:
-					var n = coord + vec
-					if city_grid.has(n):
-						for e in city_grid[n].get("edificios", []):
-							if es_edificio_muralla(e):
-								tiene_vecino_con_muralla = true
-								break
-					if tiene_vecino_con_muralla:
-						break
-				if not tiene_vecino_con_muralla:
-					return false
+			if not tiene_muralla:
+				# Muralla nueva desde cero: exige anillo urbano y trazar desde otra muralla.
+				var is_urban = normales > 0 or tiene_wonder or es_centro
+				if not is_urban: return false
+
+				var dist = HexMath.dist_hex(coord, asent_centro)
+				if dist > 0:
+					var tiene_vecino_con_muralla = false
+					for vec in HexMath.VECINOS_HEX:
+						var n = coord + vec
+						if city_grid.has(n):
+							for e in city_grid[n].get("edificios", []):
+								if es_edificio_muralla(e):
+									tiene_vecino_con_muralla = true
+									break
+						if tiene_vecino_con_muralla:
+							break
+					if not tiene_vecino_con_muralla:
+						return false
 		else:
 			if es_nueva_wonder:
-				if tiene_wonder or normales > 0 or es_centro: return false
+				if tiene_wonder or normales_vivos > 0 or es_centro: return false
 			else:
 				var max_normales = 1 if es_centro else 2
-				if tiene_wonder: return false
-				if normales >= max_normales and extraibles == 0: return false
+				# Cap sobre edificios VIGENTES: los obsoletos no cuentan
+				# porque la sobreconstrucción los retira de uno en uno.
+				if normales_vivos >= max_normales: return false
 			
 		if not es_nueva_muralla and es_recurso:
 			return false
@@ -4393,7 +5167,9 @@ class ReglasJuego:
 					var n = coord + vec
 					if city_grid.has(n) and city_grid[n].edificios.has(edificio_nombre): return false
 			
-		if era_actual == "Antiquity" and t in ["MONTAÑA", "MOUNTAINOUS"]: return false
+		# Regla general: los edificios no se colocan sobre montañas. La única
+		# excepción son las maravillas con requisito de montaña (Machu Pikchu).
+		if t in ["MONTAÑA", "MOUNTAINOUS"] and not es_nueva_wonder: return false
 	
 		var req_terreno = d.get("req_terreno", [])
 		if req_terreno.size() > 0:
@@ -4413,6 +5189,12 @@ class ReglasJuego:
 			if not valido: return false
 		else:
 			if t in ["COSTA", "COASTAL", "OCEANO", "OCEAN", "RIO_NAVEGABLE", "NAVIGABLE_RIVER"]: return false
+
+		# Machu Pikchu: sobre montaña exige además bioma/terreno Tropical o Plains.
+		if edificio_nombre == "Machu Pikchu":
+			var b_machu = str(datos_celda.get("bioma", "")).strip_edges().to_upper()
+			if b_machu not in ["TROPICAL", "PLAINS"] and t not in ["TROPICAL", "PLAINS"]:
+				return false
 			
 		if d.get("req_rio", false) and not datos_celda.get("rio", false) and t not in ["RIO_NAVEGABLE", "NAVIGABLE_RIVER"]: return false
 		
@@ -4607,54 +5389,141 @@ class GestorConstruccion:
 							d_n.reclamada = true
 
 	static func calcular_sugerencias_edificios(main: Node) -> Dictionary:
+		# ---------------------------------------------------------------------
+		# ACONSEJADOR DE RENDIMIENTOS (YIELD ADVISOR)
+		# ---------------------------------------------------------------------
+		# 1) Se recorren TODAS las celdas del mapa buscando celdas libres que
+		#    pertenezcan al anillo de construcción (dist <= 3) de algún
+		#    asentamiento propio.
+		# 2) Solo se aconseja un rendimiento si queda algún edificio de ese
+		#    rendimiento pendiente de colocar (era y civilización válidas, y sin
+		#    construir todavía en ningún asentamiento).
+		# 3) La adyacencia es predictiva y ESTRICTAMENTE mayor que 0, y se calcula
+		#    con "ignorar_adyacencia_maravillas = true": las maravillas ya
+		#    construidas NO justifican por sí solas una sugerencia.
+		# 4) Si una celda es apta para varios rendimientos, sus iconos se ordenan
+		#    de mayor a menor adyacencia (los consume el HUD en ese orden).
+		# 5) El mismo icono de rendimiento puede repetirse como máximo tantas veces
+		#    como edificios pendientes haya de ese rendimiento (cupo), eligiendo
+		#    siempre las celdas con mayor adyacencia.
 		var sugerencias = {}
 		if main.asentamientos.size() == 0 or main.asentamiento_activo_idx >= main.asentamientos.size():
 			return sugerencias
-	
-		var asent = main.asentamientos[main.asentamiento_activo_idx]
-		var asent_centro = asent.centro
-		var asent_tipo = asent.tipo
+
 		var era = main.era_actual
 		var civ = main.civ_actual
-	
-		var top_warehouses = []
-	
+		var civ_sinc = main.civ_sincretismo
+		var rendimientos_icono = ["Food", "Production", "Gold", "Science", "Culture", "Happiness", "Influence"]
+
+		# --- 1) Edificios construidos que siguen vigentes (no obsoletos). -----
+		var edificios_construidos = {}
+		for coord_c in main.city_grid.keys():
+			for e in main.city_grid[coord_c].edificios:
+				if not ReglasJuego.es_edificio_obsoleto(e, coord_c, era, main.city_grid):
+					edificios_construidos[e] = true
+
+		# --- 2) Edificios pendientes de colocar, agrupados por rendimiento. ---
+		var pendientes = []
+		var cupo_por_rend = {}
+		for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
+			# El aconsejador solo recomienda elementos construibles: nunca la UI
+			# de especialistas, que se asigna en el panel de la celda.
+			if not ReglasJuego.es_construible(edif_nombre): continue
+			var d_edif = Constantes.DATOS_EDIFICIOS[edif_nombre]
+			if edif_nombre in ["Palace", "Town Hall"]: continue
+			if d_edif.get("is_wonder", false): continue
+			if ReglasJuego.es_edificio_muralla(edif_nombre): continue
+			# Los puentes no se ocultan al construirse: no tienen límite de
+			# cantidad (el jugador puede levantar todos los del río).
+			if ReglasJuego.se_oculta_por_ya_construido(edif_nombre, edificios_construidos): continue
+			var rend = str(d_edif.get("rendimiento", ""))
+			if not rendimientos_icono.has(rend): continue
+			var era_edif = d_edif.get("era", "All")
+			# Misma regla que el panel de construcción: solo la era actual, más
+			# los almacenes de eras anteriores pendientes de construir.
+			if era_edif != "All":
+				var orden_edif = Constantes.ORDEN_ERAS.get(era_edif, 0)
+				var orden_era_consejero = Constantes.ORDEN_ERAS.get(era, 0)
+				if orden_edif != orden_era_consejero and not (orden_edif < orden_era_consejero and str(d_edif.get("tipo", "")) == "Warehouse"): continue
+			if d_edif.has("civ") and d_edif.civ != civ and d_edif.civ != civ_sinc: continue
+			pendientes.append({"nombre": edif_nombre, "rendimiento": rend})
+			cupo_por_rend[rend] = int(cupo_por_rend.get(rend, 0)) + 1
+
+		if pendientes.size() == 0: return sugerencias
+
+		# --- 3) Evaluación de celdas: candidatos por rendimiento. -------------
+		var candidatos = {}
+		for rend in cupo_por_rend.keys(): candidatos[rend] = []
+
 		for coord in main.city_grid.keys():
-			var dist = HexMath.dist_hex(coord, asent_centro)
-			if dist < 1 or dist > 3: continue
-		
 			var datos = main.city_grid[coord]
 			if datos.get("ajeno", false): continue
-			if datos.edificios.size() > 0 or datos.mejora_tipo != "": continue
-			if datos.get("caracteristica", "") == "NATURAL_WONDER" or datos.terreno == "NATURAL_WONDER": continue
-		
-			for edif_nombre in Constantes.DATOS_EDIFICIOS.keys():
-				var d_edif = Constantes.DATOS_EDIFICIOS[edif_nombre]
-				var is_warehouse = d_edif.get("tipo", "") == "Warehouse"
-			
-				if not is_warehouse: continue
-			
-				var era_edif = d_edif.get("era", "All")
-				if era_edif != "All" and Constantes.ORDEN_ERAS.get(era_edif, 0) > Constantes.ORDEN_ERAS.get(era, 0): continue
-				if not ReglasJuego.es_ubicacion_valida_para_edificio(coord, edif_nombre, asent_centro, era, civ, main.city_grid, asent_tipo, main.asentamientos): continue
-			
-				var ady = ReglasJuego.calcular_bono_edificio(coord, edif_nombre, era, main.city_grid)
-				var total = d_edif.get("base", 0) + ady
-			
-				top_warehouses.append({"coord": coord, "score": total + ady, "edificio": edif_nombre})
-					
-		top_warehouses.sort_custom(func(a, b): return a.score > b.score)
-		var count_w = 0
-		for w in top_warehouses:
-			if not sugerencias.has(w.coord): sugerencias[w.coord] = []
-			var existe = false
-			for s in sugerencias[w.coord]:
-				if s.edificio == w.edificio: existe = true
-			if not existe:
-				sugerencias[w.coord].append({"edificio": w.edificio})
-				count_w += 1
-			if count_w >= 3: break
-			
+			# Restricción de montaña: los edificios no se colocan sobre
+			# montañas, así que estas celdas quedan fuera del aconsejador.
+			if str(datos.get("terreno", "")).strip_edges().to_upper() in ["MOUNTAINOUS", "MONTAÑA"]: continue
+			# Excepción absoluta: sobre una celda con una Maravilla Construible
+			# no se aconseja nada (allí no se construye ningún edificio).
+			var tiene_wonder_adv = false
+			for e_adv in datos.edificios:
+				if Constantes.DATOS_EDIFICIOS.get(e_adv, {}).get("is_wonder", false):
+					tiene_wonder_adv = true
+					break
+			if tiene_wonder_adv: continue
+			# Un recurso ocupa la celda: no admite edificios encima, por lo que
+			# las mejoras sobre recursos tampoco se aconsejan.
+			if str(datos.get("recurso", "")) != "": continue
+			# Se evalúan celdas vacías, con edificios vigentes u obsoletos y con
+			# mejoras sin recurso: todas admiten sobreconstrucción.
+			if datos.get("caracteristica", "") == "NATURAL_WONDER" or datos.get("terreno", "") == "NATURAL_WONDER": continue
+
+			# Asentamiento propietario de la celda (anillo de construcción).
+			var centro_celda = Vector2i(-999, -999)
+			var tipo_celda = "Town"
+			for asent in main.asentamientos:
+				if HexMath.dist_hex(coord, asent.centro) <= 3:
+					centro_celda = asent.centro
+					tipo_celda = asent.tipo
+					break
+			if centro_celda == Vector2i(-999, -999): continue
+
+			for p in pendientes:
+				var rend_p = str(p["rendimiento"])
+				if not candidatos.has(rend_p): continue
+				if not ReglasJuego.es_ubicacion_valida_para_edificio(coord, str(p["nombre"]), centro_celda, era, civ, main.city_grid, tipo_celda, main.asentamientos): continue
+				var ady_p = ReglasJuego.calcular_bono_edificio(coord, str(p["nombre"]), era, main.city_grid, true)
+				if ady_p <= 0: continue
+				candidatos[rend_p].append({"coord": coord, "ady": ady_p, "edificio": str(p["nombre"])})
+
+		# --- 4) Selección: mejores celdas por rendimiento (cupo = pendientes). -
+		for rend in candidatos.keys():
+			var lista = candidatos[rend]
+			if lista.size() == 0: continue
+
+			# Una entrada por celda y rendimiento, con la mejor adyacencia.
+			var mejor_por_celda = {}
+			var orden_celdas = []
+			for cand in lista:
+				var c_celda = cand["coord"]
+				if not mejor_por_celda.has(c_celda):
+					mejor_por_celda[c_celda] = cand
+					orden_celdas.append(c_celda)
+				elif int(cand["ady"]) > int(mejor_por_celda[c_celda]["ady"]):
+					mejor_por_celda[c_celda] = cand
+
+			var entradas = []
+			for c_celda in orden_celdas: entradas.append(mejor_por_celda[c_celda])
+			entradas.sort_custom(func(a, b): return int(a["ady"]) > int(b["ady"]))
+
+			var cupo = min(int(cupo_por_rend.get(rend, 0)), entradas.size())
+			for i in range(cupo):
+				var e_sel = entradas[i]
+				if not sugerencias.has(e_sel["coord"]): sugerencias[e_sel["coord"]] = []
+				sugerencias[e_sel["coord"]].append({"rendimiento": rend, "adyacencia": int(e_sel["ady"]), "edificio": e_sel["edificio"]})
+
+		# --- 5) Orden final por celda: mayor adyacencia primero. --------------
+		for coord in sugerencias.keys().duplicate():
+			sugerencias[coord].sort_custom(func(a, b): return int(a["adyacencia"]) > int(b["adyacencia"]))
+
 		return sugerencias
 
 	static func aplicar_edificio(main: Node2D, edificio: String):
@@ -4664,9 +5533,47 @@ class GestorConstruccion:
 		if datos.get("mejora_tipo", "") != "":
 			datos.mejora_tipo = ""
 	
+		# Sobreconstrucción estrictamente UNO A UNO: el nuevo edificio retira
+		# COMO MÁXIMO UN (1) edificio de la celda; nunca se limpia la celda
+		# entera de golpe aunque haya varios obsoletos.
+		var retirado = false
+
+		# 1) El puente ocupa toda la celda: cualquier edificio nuevo lo retira
+		#    (y un puente nuevo sustituye al puente anterior, upgrade de era).
+		for e in datos.edificios.duplicate():
+			if ReglasJuego.es_edificio_puente(e) and e != edificio:
+				datos.edificios.erase(e)
+				retirado = true
+				break
+
+		# Sobreconstrucción de murallas (upgrade explícito del jugador): la muralla
+		# de la era actual sustituye a la levantada en la celda. Una muralla nunca
+		# se elimina por cambio de era, solo por esta vía.
+		if ReglasJuego.es_edificio_muralla(edificio):
+			for e in datos.edificios.duplicate():
+				if ReglasJuego.es_edificio_muralla(e) and e != edificio:
+					datos.edificios.erase(e)
+
+		# 2) Sobreconstrucción de obsoletos: se retira SOLO el primero del array
+		#    (un único borrado y break). Los demás obsoletos permanecen hasta que
+		#    el jugador vuelva a sobreconstruir sobre la celda. Se itera sobre
+		#    datos.edificios.duplicate() para poder borrar mientras se recorre,
+		#    y Array.erase() elimina únicamente la primera ocurrencia.
+
+		if not retirado and not ReglasJuego.es_edificio_muralla(edificio):
+			for e in datos.edificios.duplicate():
+				if ReglasJuego.es_edificio_obsoleto(e, main.celda_seleccionada, main.era_actual, main.city_grid):
+					datos.edificios.erase(e)
+					break
+
 		if not datos.edificios.has(edificio):
 			datos.edificios.append(edificio)
 		
+		# Los edificios pueden ampliar el límite de especialistas de la celda
+		# (solo en Ciudades y Capitales): se recalcula y se recortan los asignados
+		# si exceden el nuevo límite.
+		ReglasJuego.sincronizar_especialistas_celda(datos, ReglasJuego.tipo_asentamiento_de_celda(main.celda_seleccionada, main.asentamientos, main.asentamiento_activo_idx))
+
 		verificar_expansion_territorio(main, main.celda_seleccionada)
 	
 		main.actualizar_sugerencias_cache()
@@ -4683,7 +5590,7 @@ class GestorConstruccion:
 		if main.asentamientos.size() == 0 or main.asentamiento_activo_idx >= main.asentamientos.size(): return
 		var asent_centro = main.asentamientos[main.asentamiento_activo_idx].centro
 		var asent_tipo = main.asentamientos[main.asentamiento_activo_idx].tipo
-		if not ReglasJuego.es_mejora_valida(main.celda_seleccionada, tipo, asent_centro, main.city_grid, main.era_actual, main.civ_actual, asent_tipo):
+		if not ReglasJuego.es_mejora_valida(main.celda_seleccionada, tipo, asent_centro, main.city_grid, main.era_actual, main.civ_actual, asent_tipo, main.civ_sincretismo):
 			return
 
 		datos.mejora_tipo = tipo
@@ -4699,9 +5606,24 @@ class GestorConstruccion:
 
 	static func borrar_edificio_especifico(main: Node2D, edificio_nombre: String):
 		if not main.city_grid.has(main.celda_seleccionada): return
+		# Las murallas no se eliminan: solo se sustituyen por la versión de la
+		# era siguiente mediante upgrade. Las maravillas construibles SÍ se
+		# pueden borrar mientras dura la era a la que corresponden; pasada esa
+		# era quedan como hito permanente (tampoco se sobreconstruyen).
+		if edificio_nombre in ["Palace", "Town Hall"]: return
+		if ReglasJuego.es_edificio_muralla(edificio_nombre): return
+		if Constantes.DATOS_EDIFICIOS.get(edificio_nombre, {}).get("is_wonder", false) \
+				and not ReglasJuego.es_maravilla_borrable_en_era(edificio_nombre, main.era_actual): return
+		# Los obsoletos también están protegidos: solo la sobreconstrucción
+		# (edificio nuevo por encima) puede retirarlos del mapa.
+		if ReglasJuego.es_edificio_obsoleto(edificio_nombre, main.celda_seleccionada, main.era_actual, main.city_grid): return
 		var datos = main.city_grid[main.celda_seleccionada]
 		if datos.edificios.has(edificio_nombre):
 			datos.edificios.erase(edificio_nombre)
+			# Al borrar un edificio el límite de especialistas puede bajar: se
+			# recalcula y se recortan los asignados si exceden el nuevo límite.
+			ReglasJuego.sincronizar_especialistas_celda(datos, ReglasJuego.tipo_asentamiento_de_celda(main.celda_seleccionada, main.asentamientos, main.asentamiento_activo_idx))
+
 			main.actualizar_sugerencias_cache()
 			main.actualizar_panel_construccion()
 			main.actualizar_icono_celda(main.celda_seleccionada)
@@ -4729,6 +5651,9 @@ class GestorConstruccion:
 			datos.mejora_tipo = ""
 		
 		if not datos.edificios.has(edificio): datos.edificios.append(edificio)
+		# Un edificio externo tampoco aloja especialistas (no es celda urbana
+		# propia): el cupo de la celda queda en 0 y los asignados se recortan.
+		ReglasJuego.sincronizar_especialistas_celda(datos, ReglasJuego.tipo_asentamiento_de_celda(main.celda_seleccionada, main.asentamientos, main.asentamiento_activo_idx))
 	
 		verificar_expansion_territorio(main, main.celda_seleccionada)
 	
@@ -4760,6 +5685,9 @@ class GestorConstruccion:
 		datos.ajeno = false
 		datos.edificios.clear()
 		datos.mejora_tipo = ""
+		# Sin edificios el cupo de especialistas vuelve a 0: se recortan los
+		# asignados para no dejar especialistas huérfanos.
+		ReglasJuego.sincronizar_especialistas_celda(datos, ReglasJuego.tipo_asentamiento_de_celda(main.celda_seleccionada, main.asentamientos, main.asentamiento_activo_idx))
 		main.actualizar_panel_externos()
 		main.actualizar_visibilidad_boton_externos()
 		main.actualizar_icono_celda(main.celda_seleccionada)
@@ -4843,6 +5771,11 @@ class GestorAsentamientos:
 					"edificios_dorados": [],
 					"mejora_tipo": "",
 					"recurso": "",
+					"especialistas_asignados": 0,
+					# Cupo inicial conforme a la regla: 0 en los pueblos y en las
+					# celdas sin edificios; 1 en el centro con Palace/Town Hall de
+					# una Capital o Ciudad.
+					"limite_especialistas": ReglasJuego.limite_especialistas_celda({"edificios": edificios_iniciales, "ajeno": false}, tipo),
 					"favorita": 0,
 					"reclamada": es_centro_o_anillo_1,
 					"ajeno": false,
@@ -4913,6 +5846,10 @@ class GestorAsentamientos:
 			if coord == asent.centro:
 				if es_capital: datos.edificios.append("Palace")
 				else: datos.edificios.append("Town Hall")
+			# Cambian los edificios de la celda: el cupo de especialistas vuelve
+			# a su mínimo (0 en los pueblos, el del Palace/Town Hall en Ciudad o
+			# Capital) y los asignados se recortan.
+			ReglasJuego.sincronizar_especialistas_celda(datos, str(asent.tipo))
 				
 		if idx == main.asentamiento_activo_idx:
 			main.actualizar_sugerencias_cache()
@@ -4934,30 +5871,61 @@ class GestorAsentamientos:
 			cambiar_asentamiento_activo(main, main.asentamiento_activo_idx)
 			main.guardar_partida_actual()
 
+	# --------------------------------------------------------------------------
+	# Resincronizar el cupo de especialistas de TODAS las celdas de un
+	# asentamiento cuando cambia su tipo (pueblo <-> Ciudad o Capital): el cupo
+	# depende del tipo, así que una promoción abre los cupos de sus celdas y una
+	# degradación los cierra y retira los especialistas que ya no tienen sitio.
+	# --------------------------------------------------------------------------
+	static func sincronizar_especialistas_asentamiento(main: Node2D, idx: int) -> void:
+		if idx < 0 or idx >= main.asentamientos.size():
+			return
+		var asent = main.asentamientos[idx]
+		var tipo: String = str(asent.tipo)
+		for coord in asent.grid.keys():
+			ReglasJuego.sincronizar_especialistas_celda(asent.grid[coord], tipo)
+
 	static func cambiar_era(main: Node2D, nueva_era: String, nueva_civ: String, idx_nueva_capital: int, dorados_seleccionados: Array = []):
 		main.era_actual = nueva_era
 		main.civ_actual = nueva_civ
 		main.civ_sincretismo = "None"
 		main.era_transicionada = true
+		# Jerarquía de asentamientos: se resuelve con ReglasJuego.tipo_tras_cambio_de_era()
+		# (el elegido es la nueva Capital; la Capital de la era anterior nunca baja
+		# de Ciudad; el resto pasa a Pueblo). El índice de la Capital actual se
+		# captura ANTES de tocar ningún tipo.
+		var idx_capital_anterior: int = ReglasJuego.indice_capital(main.asentamientos)
 	
 		for i in range(main.asentamientos.size()):
 			var asent = main.asentamientos[i]
 			for coord in asent.grid.keys():
 				var c = asent.grid[coord]
+				# Transición de era: se limpian los recursos del mapa y, con ellos,
+				# todas las mejoras colocadas en las celdas (misma rutina para ambas).
 				c.recurso = ""
+				c.mejora_tipo = ""
 				c.edificios_dorados.clear()
 				for edif_oro in dorados_seleccionados:
 					if c.edificios.has(edif_oro): c.edificios_dorados.append(edif_oro)
 		
 			var c_datos = asent.grid[asent.centro]
-			if i == idx_nueva_capital:
-				asent.tipo = "Capital"
+			# Jerarquía estricta al cambiar de Era: el elegido pasa a Capital, la
+			# Capital anterior (si no es el elegido) pasa a Ciudad y NUNCA a
+			# Pueblo, y el resto (incluidas las demás Ciudades) se degrada a Pueblo.
+			asent.tipo = ReglasJuego.tipo_tras_cambio_de_era(i, idx_nueva_capital, idx_capital_anterior)
+			if asent.tipo == "Capital":
 				if c_datos.edificios.has("Town Hall"): c_datos.edificios.erase("Town Hall")
 				if not c_datos.edificios.has("Palace"): c_datos.edificios.append("Palace")
 			else:
-				asent.tipo = "Town"
+				# Solo la Capital conserva el Palace (Seat of Government): Ciudad y
+				# Pueblo llevan Town Hall (City Hall).
 				if c_datos.edificios.has("Palace"): c_datos.edificios.erase("Palace")
 				if not c_datos.edificios.has("Town Hall"): c_datos.edificios.append("Town Hall")
+			# Cambio de tipo y de edificios: el cupo de especialistas depende del
+			# tipo del asentamiento, así que se resincronizan TODAS sus celdas. Los
+			# especialistas de una Ciudad degradada a Pueblo NO se borran: quedan en
+			# LETARGO (mantenimiento reducido) y despiertan si vuelve a ser Ciudad.
+			sincronizar_especialistas_asentamiento(main, i)
 			
 		main.actualizar_botones_recursos_ui()
 		main.actualizar_sugerencias_cache()
@@ -5019,6 +5987,8 @@ class GestorArchivos:
 					"recurso": c.get("recurso", ""),
 					"favorita": c.get("favorita", 0),
 					"reclamada": c.get("reclamada", true), # ¡IMPORTANTE! Guardar reclamada
+					"especialistas_asignados": int(c.get("especialistas_asignados", 0)),
+					"limite_especialistas": int(c.get("limite_especialistas", 0)),
 					"ajeno": c.get("ajeno", false)
 				}
 			
@@ -5035,6 +6005,13 @@ class GestorArchivos:
 			"civ_sincretismo": main.civ_sincretismo,
 			"lider_actual": main.lider_actual, # ¡AQUÍ SE GUARDA EL LÍDER!
 			"era_transicionada": main.era_transicionada,
+			"mementos_activos": main.mementos_activos,
+			"politicas_activas": main.politicas_activas,
+			"tradiciones_activas": main.tradiciones_activas,
+			"tradiciones_historicas": main.tradiciones_historicas,
+			"tope_politicas": main.tope_politicas,
+			"tope_tradiciones": main.tope_tradiciones,
+			"rivales_config": main.rivales_config,
 			"asentamientos": asentamientos_limpios
 		}
 	
@@ -5056,6 +6033,24 @@ class GestorArchivos:
 		main.civ_sincretismo = datos_partida.get("civ_sincretismo", "None")
 		main.lider_actual = datos_partida.get("lider_actual", "Augustus") # ¡AQUÍ SE CARGA EL LÍDER!
 		main.era_transicionada = datos_partida.get("era_transicionada", main.era_actual != "Antiquity")
+
+		# Sistemas de Era: mementos, políticas, tradiciones y rivales. Se rellena
+		# por clave para tolerar guardados anteriores a estos campos.
+		var meme_cargados: Dictionary = datos_partida.get("mementos_activos", {})
+		var pol_cargadas: Dictionary = datos_partida.get("politicas_activas", {})
+		var trad_cargadas: Dictionary = datos_partida.get("tradiciones_activas", {})
+		for era_clave in ["Antiquity", "Exploration", "Modern Age"]:
+			if meme_cargados.has(era_clave): main.mementos_activos[era_clave] = meme_cargados[era_clave]
+			if pol_cargadas.has(era_clave): main.politicas_activas[era_clave] = pol_cargadas[era_clave]
+			if trad_cargadas.has(era_clave): main.tradiciones_activas[era_clave] = trad_cargadas[era_clave]
+		main.tradiciones_historicas = datos_partida.get("tradiciones_historicas", [])
+		main.rivales_config = datos_partida.get("rivales_config", [])
+		# Topes ampliados con los botones "+" (guardados antiguos: por defecto).
+		main.tope_politicas = int(datos_partida.get("tope_politicas", main.tope_politicas))
+		main.tope_tradiciones = int(datos_partida.get("tope_tradiciones", main.tope_tradiciones))
+		if main.tope_tradiciones > main.tope_politicas:
+			main.tope_politicas = main.tope_tradiciones
+
 		var datos_asentamientos = datos_partida.get("asentamientos", [])
 	
 		main.asentamientos.clear()
@@ -5147,6 +6142,12 @@ class GestorArchivos:
 					"nodo_recurso": hbox_recurso,
 					"nodo_terreno": hbox_terreno
 				}
+				# Especialistas (mecánica Civ VII): se cargan con .get() para
+				# tolerar guardados antiguos y se recortan al límite real, que
+				# depende de los edificios de la celda y del tipo del asentamiento
+				# (en los pueblos no puede haber ninguno).
+				grid[coord]["especialistas_asignados"] = maxi(0, int(c.get("especialistas_asignados", 0)))
+				ReglasJuego.sincronizar_especialistas_celda(grid[coord], tipo_asentamiento)
 			
 			main.asentamientos.append({
 				"nombre": asent_data.get("nombre", "Settlement"),
@@ -5220,6 +6221,156 @@ class GestorArchivos:
 		# Se anida DENTRO del diálogo de la lista (no cuelga de la raíz): así cada
 		# ventana tiene su propio hueco exclusivo y no chocan entre ellas.
 		GestorInterfaz.abrir_modal(main, confirm, parent_dialog, false, Vector2(340, 150))
+
+
+# ==============================================================================
+# MEMENTOS: REGLAS DE SELECCIÓN
+# ------------------------------------------------------------------------------
+# Los DATOS (diccionario + límites) viven en Constantes.gd (Constantes.
+# DATOS_MEMENTOS / MEMENTOS_MAXIMO_POR_ERA); aquí solo están las reglas puras.
+# ==============================================================================
+class GestorMementos:
+
+	# Devuelve la nueva lista de mementos activos al alternar un memento:
+	#   * si ya estaba activo -> se deselecciona;
+	#   * si hay hueco (< MEMENTOS_MAXIMO_POR_ERA) -> se activa;
+	#   * si está llena -> la lista queda intacta (hay que deseleccionar uno
+	#     antes de poder activar otro: los mementos son sustituibles).
+	static func alternar_memento(activos: Array, nombre: String) -> Array:
+		var nuevos := activos.duplicate()
+		if nuevos.has(nombre):
+			nuevos.erase(nombre)
+		elif nuevos.size() < Constantes.MEMENTOS_MAXIMO_POR_ERA:
+			nuevos.append(nombre)
+		return nuevos
+
+	# true si aún queda hueco en la selección de la Era.
+	static func cabe_memento(activos: Array) -> bool:
+		return activos.size() < Constantes.MEMENTOS_MAXIMO_POR_ERA
+
+	# Muestra de texto de los activos (para etiquetas de UI).
+	static func texto_activos(activos: Array) -> String:
+		if activos.is_empty():
+			return "(ninguno)"
+		var partes := PackedStringArray()
+		for n in activos:
+			partes.append(str(n))
+		return "; ".join(partes)
+
+	# Nombres de los mementos de una Era concreta: lo que debe listarse en el
+	# modal para que SOLO se muestren los de la Era actual del jugador (los de
+	# otras Eras no aparecen; "Todas" aparecería en todas).
+	static func mementos_de_era(era: String) -> Array:
+		var res: Array = []
+		for nombre in Constantes.DATOS_MEMENTOS:
+			var e := str(Constantes.DATOS_MEMENTOS[nombre].get("era", "Todas"))
+			if e == "Todas" or e == era:
+				res.append(nombre)
+		return res
+
+	# Título con la primera letra de cada palabra en mayúscula (solo visual: las
+	# claves de Constantes.DATOS_MEMENTOS no cambian para no romper selecciones
+	# ni partidas ya guardadas).
+	static func titulo_bonito(nombre: String) -> String:
+		var partes: PackedStringArray = nombre.replace("_", " ").split(" ", false)
+		var res := PackedStringArray()
+		for p in partes:
+			res.append(p.substr(0, 1).to_upper() + p.substr(1).to_lower())
+		return " ".join(res)
+
+
+# ==============================================================================
+# POLÍTICAS Y TRADICIONES: REGLAS DE SELECCIÓN Y HERENCIA
+# ------------------------------------------------------------------------------
+# Los DATOS (diccionario por Era -> Tipo y los topes por defecto) viven en
+# Constantes.gd (Constantes.DATOS_POLITICAS / MAXIMO_POLITICAS_POR_ERA /
+# MAXIMO_TRADICIONES_POR_ERA); aquí solo están las reglas puras.
+# ==============================================================================
+class GestorPoliticas:
+
+	# Nombres de las políticas de una Era (Social + Crisis + Ideology), sin tradiciones.
+	static func politicas_de_era(era: String) -> Array:
+		var res: Array = []
+		for tipo in ["Social", "Crisis", "Ideology"]:
+			for p in Constantes.DATOS_POLITICAS.get(era, {}).get(tipo, []):
+				res.append(str(p.get("nombre", "")))
+		return res
+
+	# Todas las políticas y tradiciones activas en la Era indicada. Acepta el
+	# esquema actual (politicas_activas + tradiciones_activas) o cualquier
+	# diccionario extra con el formato {era: [nombres]}.
+	static func politicas_y_tradiciones_activas(era: String, politicas: Dictionary, tradiciones: Dictionary, extras: Array = []) -> Array:
+		var res: Array = []
+		for fuente in [politicas, tradiciones]:
+			for nombre in fuente.get(era, []):
+				var texto := str(nombre)
+				if texto != "" and not res.has(texto):
+					res.append(texto)
+		for extra in extras:
+			if extra is Dictionary:
+				for nombre in extra.get(era, []):
+					var texto_extra := str(nombre)
+					if texto_extra != "" and not res.has(texto_extra):
+						res.append(texto_extra)
+			elif extra is Array:
+				for nombre in extra:
+					var texto_lista := str(nombre)
+					if texto_lista != "" and not res.has(texto_lista):
+						res.append(texto_lista)
+		return res
+
+	# Tradiciones disponibles en una Era: las propias de la Era (dato) más las que
+	# estuvieron activas en algún momento (históricas), que se acoplan así a las
+	# listas de las Eras siguientes.
+	static func tradiciones_disponibles(era: String, historicas: Array) -> Array:
+		var res: Array = []
+		var vistas := {}
+		for p in Constantes.DATOS_POLITICAS.get(era, {}).get("Tradiciones", []):
+			var nombre_era := str(p.get("nombre", ""))
+			if not vistas.has(nombre_era):
+				vistas[nombre_era] = true
+				res.append(p)
+		for historia in historicas:
+			var nombre_hist := str(historia)
+			if vistas.has(nombre_hist):
+				continue
+			var dato: Dictionary = buscar_tradicion(nombre_hist)
+			if not dato.is_empty():
+				vistas[nombre_hist] = true
+				res.append(dato)
+		return res
+
+	# Busca la definición de una tradición por nombre en todas las Eras.
+	static func buscar_tradicion(nombre: String) -> Dictionary:
+		for era_actual in Constantes.DATOS_POLITICAS:
+			for p in Constantes.DATOS_POLITICAS[era_actual].get("Tradiciones", []):
+				if str(p.get("nombre", "")) == nombre:
+					return p
+		return {}
+
+	# Alternar política (mismo patrón que los mementos: sustituibles, con tope).
+	# `tope` opcional: los botones "+" del modal amplían el tope por partida.
+	static func alternar_politica(activos: Array, nombre: String, tope: int = Constantes.MAXIMO_POLITICAS_POR_ERA) -> Array:
+		var nuevos := activos.duplicate()
+		if nuevos.has(nombre):
+			nuevos.erase(nombre)
+		elif nuevos.size() < tope:
+			nuevos.append(nombre)
+		return nuevos
+
+	# Alternar tradición con su tope exclusivo (el tope global lo controla la UI).
+	# `tope` opcional: los botones "+" del modal amplían el tope por partida.
+	static func alternar_tradicion(activos: Array, nombre: String, tope: int = Constantes.MAXIMO_TRADICIONES_POR_ERA) -> Array:
+		var nuevos := activos.duplicate()
+		if nuevos.has(nombre):
+			nuevos.erase(nombre)
+		elif nuevos.size() < tope:
+			nuevos.append(nombre)
+		return nuevos
+
+	# Total de políticas de la Era: INCLUYE las tradiciones activas.
+	static func total_politicas(politicas: Array, tradiciones: Array) -> int:
+		return politicas.size() + tradiciones.size()
 
 
 class GestorDialogos:
@@ -5472,7 +6623,7 @@ class GestorDialogos:
 		vbox.add_theme_constant_override("separation", 10)
 	
 		var lbl_adv = Label.new()
-		lbl_adv.text = "All resources will be cleared from the map."
+		lbl_adv.text = "All resources and improvements will be cleared from the map."
 		vbox.add_child(lbl_adv)
 	
 		var elegibles = []
@@ -5556,6 +6707,628 @@ class GestorDialogos:
 		dialog.close_requested.connect(func(): dialog.queue_free())
 		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(700, 600))
 
+
+	# ------------------------------------------------------------------------------
+	# MEMENTOS (modal de la Era actual)
+	# ------------------------------------------------------------------------------
+	# Solo aparecen los mementos de la Era en la que está el jugador (los de
+	# otras Eras no se muestran). Se activan como máximo
+	# Constantes.MEMENTOS_MAXIMO_POR_ERA mementos: si la selección está llena y pulsa
+	# un tercero, se muestra un aviso y hay que deseleccionar uno previo. Los
+	# títulos se muestran con la primera letra de cada palabra en mayúscula.
+	static func mostrar_dialogo_mementos(main: Node2D):
+		var era: String = main.era_actual
+		if not main.mementos_activos.has(era):
+			main.mementos_activos[era] = []
+		var dialog = AcceptDialog.new()
+		dialog.title = "Mementos · " + era
+		var vbox = VBoxContainer.new()
+		vbox.add_theme_constant_override("separation", 8)
+		var lbl_info = Label.new()
+		lbl_info.text = "Era actual: %s · Máximo %d mementos activos. Solo se listan los de esta Era; pulsa uno seleccionado para deseleccionarlo (son sustituibles)." % [era, Constantes.MEMENTOS_MAXIMO_POR_ERA]
+		lbl_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		vbox.add_child(lbl_info)
+
+		var scroll = ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(730, 430)
+		vbox.add_child(scroll)
+
+		var hbox_cab = HBoxContainer.new()
+		var lbl_contador = Label.new()
+		var lbl_aviso = Label.new()
+		lbl_aviso.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl_aviso.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl_aviso.add_theme_color_override("font_color", Color(1.0, 0.6, 0.45))
+		hbox_cab.add_child(lbl_contador)
+		hbox_cab.add_child(lbl_aviso)
+		vbox.add_child(hbox_cab)
+
+		var grid = GridContainer.new()
+		grid.columns = 4
+		grid.add_theme_constant_override("h_separation", 10)
+		grid.add_theme_constant_override("v_separation", 10)
+		grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scroll.add_child(grid)
+
+		var tarjetas: Dictionary = {}
+		var era_ref: String = era
+		for nombre in GestorMementos.mementos_de_era(era):
+			var datos: Dictionary = Constantes.DATOS_MEMENTOS[nombre]
+			var card = PanelContainer.new()
+			card.custom_minimum_size = Vector2(165, 105)
+			card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			var margen = MarginContainer.new()
+			for lado in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+				margen.add_theme_constant_override(lado, 8)
+			var card_vbox = VBoxContainer.new()
+			card_vbox.add_theme_constant_override("separation", 4)
+			var lbl_nom = Label.new()
+			lbl_nom.text = GestorMementos.titulo_bonito(nombre)
+			lbl_nom.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lbl_nom.add_theme_font_size_override("font_size", 12)
+			var lbl_desc = Label.new()
+			lbl_desc.text = str(datos.get("descripcion", ""))
+			lbl_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lbl_desc.add_theme_font_size_override("font_size", 10)
+			lbl_desc.add_theme_color_override("font_color", Color(0.72, 0.72, 0.8))
+			card_vbox.add_child(lbl_nom)
+			card_vbox.add_child(lbl_desc)
+			margen.add_child(card_vbox)
+			card.add_child(margen)
+			grid.add_child(card)
+			tarjetas[nombre] = card
+			card.gui_input.connect(func(event: InputEvent):
+				if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+					var activos: Array = main.mementos_activos[era_ref]
+					var tenia: bool = activos.has(nombre)
+					var nuevo: Array = GestorMementos.alternar_memento(activos, nombre)
+					main.mementos_activos[era_ref] = nuevo
+					if nuevo.size() == activos.size() and not tenia:
+						lbl_aviso.text = "Selección llena: deselecciona un memento para elegir otro."
+					else:
+						lbl_aviso.text = ""
+					lbl_contador.text = "%d/%d" % [nuevo.size(), Constantes.MEMENTOS_MAXIMO_POR_ERA]
+					_pintar_tarjetas_mementos(tarjetas, nuevo)
+			)
+		_pintar_tarjetas_mementos(tarjetas, main.mementos_activos[era])
+		lbl_contador.text = "%d/%d" % [main.mementos_activos[era].size(), Constantes.MEMENTOS_MAXIMO_POR_ERA]
+
+		dialog.add_child(vbox)
+		dialog.confirmed.connect(func(): dialog.queue_free())
+		dialog.canceled.connect(func(): dialog.queue_free())
+		dialog.close_requested.connect(func(): dialog.queue_free())
+		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(760, 560))
+
+	# Borde dorado + fondo resaltado para las tarjetas activas.
+	static func _pintar_tarjetas_mementos(tarjetas: Dictionary, activos: Array) -> void:
+		for nombre in tarjetas.keys():
+			var card: PanelContainer = tarjetas[nombre]
+			var activa: bool = activos.has(nombre)
+			var sb = StyleBoxFlat.new()
+			sb.bg_color = Color(0.26, 0.22, 0.08) if activa else Color(0.12, 0.12, 0.16)
+			sb.border_color = Color(1.0, 0.85, 0.3) if activa else Color(0.3, 0.3, 0.3)
+			sb.set_border_width_all(3 if activa else 2)
+			sb.set_corner_radius_all(8)
+			card.add_theme_stylebox_override("panel", sb)
+
+	# ------------------------------------------------------------------------------
+	# CONFIGURACIÓN DE RIVALES
+	# ------------------------------------------------------------------------------
+	# Filas editables en vivo: cada fila muta su diccionario dentro de
+	# main.rivales_config. Reglas:
+	#   1) Las listas excluyen siempre al líder y la civ del jugador humano.
+	#   2) No pueden coexistir dos rivales con el mismo líder ni con la misma
+	#      civ: cada fila solo ve los valores libres y, al cambiar uno, se
+	#      refrescan las opciones de las demás filas.
+	#   3) La relación se colorea para identificarla de un vistazo
+	#      (Constantes.COLORES_RELACION).
+	static func lideres_para_rivales(main: Node2D) -> Array:
+		return Constantes.LIDERES.filter(func(l): return l != main.lider_actual)
+
+	static func civs_para_rivales(main: Node2D) -> Array:
+		return Constantes.TODAS_LAS_CIVS.filter(func(c): return c != main.civ_actual)
+
+	static func _rival_por_defecto(main: Node2D) -> Dictionary:
+		# El líder y la civ por defecto descartan los ya usados por otros rivales
+		# (los del jugador humano ya los excluyen *_para_rivales).
+		var usados_lideres := {}
+		var usados_civs := {}
+		for r in main.rivales_config:
+			usados_lideres[str(r.get("lider", ""))] = true
+			usados_civs[str(r.get("civ", ""))] = true
+		var lider_elegido := "None"
+		for l in lideres_para_rivales(main):
+			if not usados_lideres.has(l):
+				lider_elegido = l
+				break
+		var civ_elegida := "None"
+		for c in civs_para_rivales(main):
+			if not usados_civs.has(c):
+				civ_elegida = c
+				break
+		return {
+			"lider": lider_elegido,
+			"civ": civ_elegida,
+			"relacion": "Neutro",
+			"rutas": 0
+		}
+
+	static func _seleccionar_opcion(opt: OptionButton, valor: String) -> void:
+		for i in range(opt.item_count):
+			if opt.get_item_text(i) == valor:
+				opt.select(i)
+				return
+		if opt.item_count > 0:
+			opt.select(0)
+
+	# Sanea rivales ya guardados: si hubiera líderes o civs repetidos entre
+	# rivales (o del jugador humano), se reasigna el primer valor libre.
+	static func _sanear_rivales(main: Node2D) -> void:
+		var vistos_l := {}
+		var vistos_c := {}
+		for r in main.rivales_config:
+			var l := str(r.get("lider", ""))
+			if l == "" or l == main.lider_actual or vistos_l.has(l):
+				for cand_l in lideres_para_rivales(main):
+					if not vistos_l.has(cand_l):
+						l = cand_l
+						break
+			vistos_l[l] = true
+			r["lider"] = l
+			var c := str(r.get("civ", ""))
+			if c == "" or c == main.civ_actual or vistos_c.has(c):
+				for cand_c in civs_para_rivales(main):
+					if not vistos_c.has(cand_c):
+						c = cand_c
+						break
+			vistos_c[c] = true
+			r["civ"] = c
+
+	# Repuebla líder/civ de cada fila descartando los que ya usa otro rival
+	# (los de la propia fila se conservan siempre).
+	static func _refrescar_opciones_rivales(main: Node2D, filas: Array) -> void:
+		for f in filas:
+			var otros_lideres := {}
+			var otros_civs := {}
+			for g in filas:
+				if g == f:
+					continue
+				otros_lideres[str(g.datos.get("lider", ""))] = true
+				otros_civs[str(g.datos.get("civ", ""))] = true
+			var liders: Array = []
+			for l in lideres_para_rivales(main):
+				if not otros_lideres.has(l):
+					liders.append(l)
+			var civs: Array = []
+			for c in civs_para_rivales(main):
+				if not otros_civs.has(c):
+					civs.append(c)
+			_rellenar_opcion(f.opt_lider, liders, f.datos, "lider")
+			_rellenar_opcion(f.opt_civ, civs, f.datos, "civ")
+
+	static func _rellenar_opcion(opt: OptionButton, valores: Array, datos: Dictionary, clave: String) -> void:
+		opt.clear()
+		for v in valores:
+			opt.add_item(v)
+		var actual := str(datos.get(clave, ""))
+		var idx := -1
+		for i in range(opt.item_count):
+			if opt.get_item_text(i) == actual:
+				idx = i
+				break
+		if idx == -1 and opt.item_count > 0:
+			idx = 0
+			datos[clave] = opt.get_item_text(0)
+		if idx >= 0:
+			opt.select(idx)
+
+	# Texto legible encima del color de relación (negro sobre colores claros,
+	# blanco sobre los oscuros: Guerra es negro, Furioso marrón...).
+	static func _texto_sobre(color: Color) -> Color:
+		var lum := 0.299 * color.r + 0.587 * color.g + 0.114 * color.b
+		return Color(0, 0, 0) if lum > 0.5 else Color(1, 1, 1)
+
+	# Colorea el selector de relación y tiñe la fila para identificarla de un vistazo.
+	static func _pintar_relacion(opt: OptionButton, sb_fila: StyleBoxFlat, nombre: String) -> void:
+		var color: Color = Constantes.COLORES_RELACION.get(nombre, Color(0.25, 0.5, 0.95))
+		var texto := _texto_sobre(color)
+		for estado in ["normal", "hover", "pressed"]:
+			var sb = StyleBoxFlat.new()
+			sb.bg_color = color
+			sb.set_corner_radius_all(6)
+			sb.content_margin_left = 10.0
+			sb.content_margin_right = 10.0
+			sb.content_margin_top = 4.0
+			sb.content_margin_bottom = 4.0
+			opt.add_theme_stylebox_override(estado, sb)
+		opt.add_theme_color_override("font_color", texto)
+		opt.add_theme_color_override("font_hover_color", texto)
+		opt.add_theme_color_override("font_pressed_color", texto)
+		sb_fila.bg_color = Color(color.r, color.g, color.b, 0.16)
+
+	static func _crear_fila_rival(main: Node2D, datos: Dictionary, lbl_vacio: Label, filas: Array) -> Control:
+		var fila = PanelContainer.new()
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Color(0.15, 0.15, 0.2)
+		sb.set_corner_radius_all(6)
+		fila.add_theme_stylebox_override("panel", sb)
+		var hbox = HBoxContainer.new()
+		hbox.add_theme_constant_override("separation", 8)
+		fila.add_child(hbox)
+
+		# Opciones iniciales: se descartan los líderes/civs de otros rivales.
+		var otros_lideres := {}
+		var otros_civs := {}
+		for f in filas:
+			otros_lideres[str(f.datos.get("lider", ""))] = true
+			otros_civs[str(f.datos.get("civ", ""))] = true
+
+		var opt_lider = OptionButton.new()
+		opt_lider.custom_minimum_size = Vector2(170, 0)
+		opt_lider.tooltip_text = "Líder del rival (tu líder y los de otros rivales quedan excluidos)"
+		for l in lideres_para_rivales(main):
+			if not otros_lideres.has(l):
+				opt_lider.add_item(l)
+		_seleccionar_opcion(opt_lider, str(datos.get("lider", "")))
+		opt_lider.item_selected.connect(func(idx: int):
+			datos["lider"] = opt_lider.get_item_text(idx)
+			_refrescar_opciones_rivales(main, filas)
+		)
+		hbox.add_child(opt_lider)
+
+		var opt_civ = OptionButton.new()
+		opt_civ.custom_minimum_size = Vector2(155, 0)
+		opt_civ.tooltip_text = "Civilización del rival (la tuya y las de otros rivales quedan excluidas)"
+		for c in civs_para_rivales(main):
+			if not otros_civs.has(c):
+				opt_civ.add_item(c)
+		_seleccionar_opcion(opt_civ, str(datos.get("civ", "")))
+		opt_civ.item_selected.connect(func(idx: int):
+			datos["civ"] = opt_civ.get_item_text(idx)
+			_refrescar_opciones_rivales(main, filas)
+		)
+		hbox.add_child(opt_civ)
+
+		var opt_rel = OptionButton.new()
+		opt_rel.custom_minimum_size = Vector2(150, 0)
+		opt_rel.tooltip_text = "Estado de relación (coloreado: Alianza verde, Guerra negro...)"
+		for e in Constantes.ESTADOS_RELACION:
+			opt_rel.add_item(e)
+		_seleccionar_opcion(opt_rel, str(datos.get("relacion", "Neutro")))
+		opt_rel.item_selected.connect(func(idx: int):
+			datos["relacion"] = opt_rel.get_item_text(idx)
+			_pintar_relacion(opt_rel, sb, str(datos["relacion"]))
+		)
+		_pintar_relacion(opt_rel, sb, str(datos.get("relacion", "Neutro")))
+		hbox.add_child(opt_rel)
+
+		var spin_rutas = SpinBox.new()
+		spin_rutas.prefix = "Rutas"
+		spin_rutas.min_value = 0
+		spin_rutas.max_value = 999
+		spin_rutas.step = 1
+		spin_rutas.value = float(datos.get("rutas", 0))
+		spin_rutas.value_changed.connect(func(v: float): datos["rutas"] = int(v))
+		hbox.add_child(spin_rutas)
+
+		var btn_quitar = Button.new()
+		btn_quitar.text = "✕"
+		btn_quitar.tooltip_text = "Quitar rival"
+		btn_quitar.pressed.connect(func():
+			main.rivales_config.erase(datos)
+			for i in range(filas.size()):
+				if filas[i].datos == datos:
+					filas.remove_at(i)
+					break
+			lbl_vacio.visible = main.rivales_config.is_empty()
+			_refrescar_opciones_rivales(main, filas)
+			fila.queue_free()
+		)
+		hbox.add_child(btn_quitar)
+		filas.append({"datos": datos, "opt_lider": opt_lider, "opt_civ": opt_civ, "opt_rel": opt_rel})
+		return fila
+
+	static func mostrar_dialogo_rivales(main: Node2D):
+		# Si hubiera duplicados de partidas previas, se sanean antes de pintar.
+		_sanear_rivales(main)
+		var dialog = AcceptDialog.new()
+		dialog.title = "Configuración de Rivales"
+		var vbox = VBoxContainer.new()
+		vbox.add_theme_constant_override("separation", 8)
+		var lbl_info = Label.new()
+		lbl_info.text = "Tu líder (%s) y tu civilización (%s) quedan fuera de las listas; tampoco se repiten líderes ni civs entre rivales." % [main.lider_actual, main.civ_actual]
+		lbl_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		vbox.add_child(lbl_info)
+
+		var scroll = ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(790, 340)
+		vbox.add_child(scroll)
+		var vbox_filas = VBoxContainer.new()
+		vbox_filas.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vbox_filas.add_theme_constant_override("separation", 6)
+		scroll.add_child(vbox_filas)
+
+		var lbl_vacio = Label.new()
+		lbl_vacio.text = "Sin rivales todavía. Pulsa «Añadir rival»."
+		lbl_vacio.visible = main.rivales_config.is_empty()
+		vbox_filas.add_child(lbl_vacio)
+
+		var filas: Array = []
+		for datos in main.rivales_config:
+			vbox_filas.add_child(_crear_fila_rival(main, datos, lbl_vacio, filas))
+		_refrescar_opciones_rivales(main, filas)
+
+		var btn_anadir = Button.new()
+		btn_anadir.text = "➕ Añadir rival"
+		btn_anadir.pressed.connect(func():
+			# El rival nuevo nace con líder/civ distintos a los ya existentes.
+			var nuevo: Dictionary = _rival_por_defecto(main)
+			main.rivales_config.append(nuevo)
+			lbl_vacio.visible = false
+			vbox_filas.add_child(_crear_fila_rival(main, nuevo, lbl_vacio, filas))
+			_refrescar_opciones_rivales(main, filas)
+		)
+		vbox.add_child(btn_anadir)
+
+		dialog.add_child(vbox)
+		dialog.confirmed.connect(func(): dialog.queue_free())
+		dialog.canceled.connect(func(): dialog.queue_free())
+		dialog.close_requested.connect(func(): dialog.queue_free())
+		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(850, 520))
+
+	# ------------------------------------------------------------------------------
+	# POLÍTICAS Y TRADICIONES (modal de la Era actual)
+	# ------------------------------------------------------------------------------
+	# Solo se muestran las políticas y tradiciones de la Era actual. Las tarjetas
+	# se marcan igual que los mementos (clic para activar/desactivar, borde
+	# dorado cuando están activas) con dos contadores:
+	#   * Políticas  : total de la Era, INCLUYENDO las tradiciones activas.
+	#   * Tradiciones: contador exclusivo de tradiciones.
+	# Las tradiciones activas quedan en tradiciones_historicas (se guardan) y se
+	# acoplan a las listas de las Eras siguientes. Si es_cambio_era, el diálogo
+	# incluye el botón para continuar con el cambio de Era.
+	# Junto a cada contador hay un botón "+" que amplía el tope de disponibilidad
+	# (main.tope_politicas / main.tope_tradiciones) al instante y se guarda.
+	static func mostrar_dialogo_politicas(main: Node2D, es_cambio_era: bool = false):
+		var era: String = main.era_actual
+		if not main.politicas_activas.has(era):
+			main.politicas_activas[era] = []
+		if not main.tradiciones_activas.has(era):
+			main.tradiciones_activas[era] = []
+		var siguiente := ""
+		if era == "Antiquity":
+			siguiente = "Exploration"
+		elif era == "Exploration":
+			siguiente = "Modern Age"
+
+		var dialog = AcceptDialog.new()
+		dialog.title = "Políticas y Tradiciones · " + era
+		var vbox = VBoxContainer.new()
+		vbox.add_theme_constant_override("separation", 8)
+
+		if es_cambio_era:
+			var lbl_trans = Label.new()
+			if siguiente != "":
+				lbl_trans.text = "Cambio de Era: marca las Tradiciones que quieras que estén disponibles en %s." % siguiente
+			else:
+				lbl_trans.text = "Estás en la Era final: no hay una Era siguiente disponible."
+			lbl_trans.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lbl_trans.add_theme_color_override("font_color", Color(1.0, 0.87, 0.5))
+			vbox.add_child(lbl_trans)
+
+		var hbox_cont = HBoxContainer.new()
+		hbox_cont.add_theme_constant_override("separation", 16)
+		var lbl_pol = Label.new()
+		var lbl_trad = Label.new()
+		var lbl_aviso = Label.new()
+		lbl_aviso.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl_aviso.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl_aviso.add_theme_color_override("font_color", Color(1.0, 0.6, 0.45))
+		# Botones "+": amplían el tope de disponibilidad de cada contador.
+		var btn_pol_mas = Button.new()
+		btn_pol_mas.text = "+"
+		btn_pol_mas.tooltip_text = "Ampliar el tope de políticas disponibles en esta partida"
+		btn_pol_mas.custom_minimum_size = Vector2(34, 0)
+		var btn_trad_mas = Button.new()
+		btn_trad_mas.text = "+"
+		btn_trad_mas.tooltip_text = "Ampliar el tope de tradiciones disponibles en esta partida"
+		btn_trad_mas.custom_minimum_size = Vector2(34, 0)
+		# Expuestos como meta para poder localizarlos desde los tests.
+		dialog.set_meta("btn_pol_mas", btn_pol_mas)
+		dialog.set_meta("btn_trad_mas", btn_trad_mas)
+		dialog.set_meta("lbl_pol", lbl_pol)
+		dialog.set_meta("lbl_trad", lbl_trad)
+		hbox_cont.add_child(lbl_pol)
+		hbox_cont.add_child(btn_pol_mas)
+		hbox_cont.add_child(lbl_trad)
+		hbox_cont.add_child(btn_trad_mas)
+		hbox_cont.add_child(lbl_aviso)
+		vbox.add_child(hbox_cont)
+
+		var iconos := {"Social": "📜", "Crisis": "⚔️", "Ideology": "🚩", "Tradiciones": "🏛️"}
+		var scroll = ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(770, 400)
+		vbox.add_child(scroll)
+		var cont_scroll = VBoxContainer.new()
+		cont_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cont_scroll.add_theme_constant_override("separation", 8)
+		scroll.add_child(cont_scroll)
+
+		var tarjetas_pol: Dictionary = {}
+		var tarjetas_trad: Dictionary = {}
+
+		# Refresca contadores (el total INCLUYE las tradiciones) y bordes dorados.
+		var refrescar: Callable = func() -> void:
+			var total: int = main.politicas_activas[era].size() + main.tradiciones_activas[era].size()
+			lbl_pol.text = "📜 Políticas: %d/%d (incluye tradiciones)" % [total, main.tope_politicas]
+			lbl_trad.text = "🏛️ Tradiciones: %d/%d" % [main.tradiciones_activas[era].size(), main.tope_tradiciones]
+			for np in tarjetas_pol:
+				_pintar_tarjeta_politica(tarjetas_pol[np], main.politicas_activas[era].has(np))
+			for nt in tarjetas_trad:
+				_pintar_tarjeta_politica(tarjetas_trad[nt], main.tradiciones_activas[era].has(nt))
+		# Clic en tarjeta: alterna como los mementos, respetando ambos topes.
+		var alternar_tarjeta: Callable = func(nombre: String, es_tradicion: bool) -> void:
+			var activas: Array = main.tradiciones_activas[era] if es_tradicion else main.politicas_activas[era]
+			if activas.has(nombre):
+				if es_tradicion:
+					main.tradiciones_activas[era] = GestorPoliticas.alternar_tradicion(activas, nombre, main.tope_tradiciones)
+				else:
+					main.politicas_activas[era] = GestorPoliticas.alternar_politica(activas, nombre, main.tope_politicas)
+				lbl_aviso.text = ""
+			else:
+				var total: int = main.politicas_activas[era].size() + main.tradiciones_activas[era].size()
+				if es_tradicion and main.tradiciones_activas[era].size() >= main.tope_tradiciones:
+					lbl_aviso.text = "Tradiciones llenas: deselecciona una para elegir otra."
+				elif total >= main.tope_politicas:
+					lbl_aviso.text = "Políticas llenas: deselecciona una para elegir otra."
+				else:
+					if es_tradicion:
+						main.tradiciones_activas[era] = GestorPoliticas.alternar_tradicion(activas, nombre, main.tope_tradiciones)
+						# Una tradición activa en algún momento queda histórica:
+						# se guarda y se acopla a las Eras siguientes.
+						if not main.tradiciones_historicas.has(nombre):
+							main.tradiciones_historicas.append(nombre)
+					else:
+						main.politicas_activas[era] = GestorPoliticas.alternar_politica(activas, nombre, main.tope_politicas)
+					lbl_aviso.text = ""
+			refrescar.call()
+		# Enlace con los rendimientos: las políticas modifican los totales, así que
+		# al activar o desactivar una se recalculan la caja de rendimientos de la
+		# celda (actualizar_panel_ui) y el panel de totales del asentamiento, y se
+		# persiste la partida como en cualquier otra acción del jugador.
+		main.actualizar_panel_ui()
+		main.actualizar_panel_recuento_mejoras()
+		main.guardar_partida_actual()
+
+
+		# Botones "+": amplían el tope de disponibilidad (se guardan con la partida).
+		btn_pol_mas.pressed.connect(func():
+			main.tope_politicas += 1
+			lbl_aviso.text = ""
+			refrescar.call()
+		)
+		btn_trad_mas.pressed.connect(func():
+			main.tope_tradiciones += 1
+			# Mantener el invariante: las tradiciones deben caber en el total.
+			if main.tope_politicas < main.tope_tradiciones:
+				main.tope_politicas = main.tope_tradiciones
+			lbl_aviso.text = ""
+			refrescar.call()
+		)
+
+		for tipo in ["Social", "Crisis", "Ideology", "Tradiciones"]:
+			var lista: Array = []
+			if tipo == "Tradiciones":
+				# Tradiciones de esta Era más las heredadas de Eras anteriores.
+				lista = GestorPoliticas.tradiciones_disponibles(era, main.tradiciones_historicas)
+			else:
+				lista = Constantes.DATOS_POLITICAS[era].get(tipo, [])
+			if lista.is_empty():
+				continue
+			var lbl_seccion = Label.new()
+			lbl_seccion.text = "%s %s (%d)" % [str(iconos.get(tipo, "")), tipo, lista.size()]
+			lbl_seccion.add_theme_font_size_override("font_size", 15)
+			lbl_seccion.add_theme_color_override("font_color", Color(1.0, 0.87, 0.5))
+			cont_scroll.add_child(lbl_seccion)
+			var grid = GridContainer.new()
+			grid.columns = 2
+			grid.add_theme_constant_override("h_separation", 10)
+			grid.add_theme_constant_override("v_separation", 10)
+			grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			cont_scroll.add_child(grid)
+			for p in lista:
+				var nombre_pol: String = str(p.get("nombre", ""))
+				var card = _crear_tarjeta_politica(p)
+				grid.add_child(card)
+				if tipo == "Tradiciones":
+					tarjetas_trad[nombre_pol] = card
+					card.gui_input.connect(func(event: InputEvent):
+						if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+							alternar_tarjeta.call(nombre_pol, true)
+					)
+				else:
+					tarjetas_pol[nombre_pol] = card
+					card.gui_input.connect(func(event: InputEvent):
+						if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+							alternar_tarjeta.call(nombre_pol, false)
+					)
+			cont_scroll.add_child(HSeparator.new())
+
+		refrescar.call()
+
+		if es_cambio_era:
+			if siguiente != "":
+				var btn_continuar = Button.new()
+				btn_continuar.text = "▶ Continuar: cambiar de Era"
+				btn_continuar.tooltip_text = "Abre la confirmación del cambio a la Era siguiente"
+				btn_continuar.pressed.connect(func():
+					GestorDialogos.mostrar_dialogo_confirmar_siguiente_era(main)
+					dialog.queue_free()
+				)
+				vbox.add_child(btn_continuar)
+			dialog.get_ok_button().text = "Cerrar"
+
+		dialog.add_child(vbox)
+		dialog.confirmed.connect(func(): dialog.queue_free())
+		dialog.canceled.connect(func(): dialog.queue_free())
+		dialog.close_requested.connect(func(): dialog.queue_free())
+		GestorInterfaz.abrir_modal(main, dialog, null, false, Vector2(820, 620))
+
+	# Tarjeta de política: nombre, requisito (y ideología si aplica) y efecto.
+	static func _crear_tarjeta_politica(p: Dictionary) -> Control:
+		var card = PanelContainer.new()
+		card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Color(0.13, 0.13, 0.18)
+		sb.border_color = Color(0.3, 0.3, 0.42)
+		sb.set_border_width_all(1)
+		sb.set_corner_radius_all(8)
+		card.add_theme_stylebox_override("panel", sb)
+		var margen = MarginContainer.new()
+		for lado in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+			margen.add_theme_constant_override(lado, 8)
+		var cvb = VBoxContainer.new()
+		cvb.add_theme_constant_override("separation", 3)
+
+		var lbl_nom = Label.new()
+		lbl_nom.text = str(p.get("nombre", ""))
+		lbl_nom.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl_nom.add_theme_font_size_override("font_size", 13)
+		lbl_nom.add_theme_color_override("font_color", Color(0.95, 0.95, 1.0))
+		cvb.add_child(lbl_nom)
+
+		var req := str(p.get("requisito", ""))
+		if p.has("ideologia"):
+			var ideo := str(p.get("ideologia", ""))
+			req = (req + "  ·  " + ideo) if req != "" else ideo
+		if req != "":
+			var lbl_req = Label.new()
+			lbl_req.text = "Requisito: " + req
+			lbl_req.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			lbl_req.add_theme_font_size_override("font_size", 11)
+			lbl_req.add_theme_color_override("font_color", Color(0.55, 0.75, 1.0))
+			cvb.add_child(lbl_req)
+
+		var lbl_ef = Label.new()
+		lbl_ef.text = str(p.get("efecto", ""))
+		lbl_ef.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl_ef.add_theme_font_size_override("font_size", 11)
+		lbl_ef.add_theme_color_override("font_color", Color(0.78, 0.78, 0.85))
+		cvb.add_child(lbl_ef)
+
+		margen.add_child(cvb)
+		card.add_child(margen)
+		return card
+
+	# Borde dorado + fondo resaltado para las tarjetas activas (mismo estilo que
+	# los mementos); las inactivas conservan su aspecto base.
+	static func _pintar_tarjeta_politica(card: PanelContainer, activa: bool) -> void:
+		var sb = StyleBoxFlat.new()
+		sb.bg_color = Color(0.26, 0.22, 0.08) if activa else Color(0.13, 0.13, 0.18)
+		sb.border_color = Color(1.0, 0.85, 0.3) if activa else Color(0.3, 0.3, 0.42)
+		sb.set_border_width_all(3 if activa else 1)
+		sb.set_corner_radius_all(8)
+		card.add_theme_stylebox_override("panel", sb)
 
 class GestorInterfaz:
 
@@ -5652,11 +7425,18 @@ class GestorInterfaz:
 		var btn_modo_externos = crear_boton_menu("🌐", "External")
 		var btn_menu_felicidad = crear_boton_menu("😊", "Happiness Viewer")
 	
+		var btn_mementos = crear_boton_menu("🏅", "Mementos")
+		var btn_rivales = crear_boton_menu("🤝", "Rivales")
+		var btn_politicas = crear_boton_menu("📜", "Políticas")
+
 		vbox_navegacion.add_child(btn_menu_asentamientos)
 		vbox_navegacion.add_child(btn_menu_pincel)
 		vbox_navegacion.add_child(btn_modo_construccion)
 		vbox_navegacion.add_child(btn_modo_externos)
 		vbox_navegacion.add_child(btn_menu_felicidad)
+		vbox_navegacion.add_child(btn_mementos)
+		vbox_navegacion.add_child(btn_rivales)
+		vbox_navegacion.add_child(btn_politicas)
 	
 		var panel_desplegable = PanelContainer.new()
 		panel_desplegable.custom_minimum_size = Vector2(460, 750)
@@ -6028,7 +7808,7 @@ class GestorInterfaz:
 		var style_btn = StyleBoxFlat.new()
 		style_btn.set_corner_radius_all(6)
 		btn_avanzar_era.add_theme_stylebox_override("normal", style_btn)
-		btn_avanzar_era.pressed.connect(main.mostrar_dialogo_confirmar_siguiente_era)
+		btn_avanzar_era.pressed.connect(main.mostrar_panel_politicas_cambio_era)
 		buttons_vbox.add_child(btn_avanzar_era)
 
 		var lbl_asent_title = Label.new()
@@ -6103,6 +7883,9 @@ class GestorInterfaz:
 		btn_modo_construccion.pressed.connect(func(): main.cambiar_seccion("CONSTRUCCION"))
 		btn_modo_externos.pressed.connect(func(): main.cambiar_seccion("EXTERNOS"))
 		btn_menu_felicidad.pressed.connect(func(): main.cambiar_seccion("FELICIDAD"))
+		btn_mementos.pressed.connect(func(): main.mostrar_dialogo_mementos())
+		btn_rivales.pressed.connect(func(): main.mostrar_dialogo_rivales())
+		btn_politicas.pressed.connect(func(): main.mostrar_dialogo_politicas())
 		btn_quitar_recurso.pressed.connect(func(): main._aplicar_recurso(""))
 
 		return {

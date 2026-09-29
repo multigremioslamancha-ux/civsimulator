@@ -30,6 +30,23 @@ const TODAS_LAS_CIVS = [
 	"American", "British", "Bugandan", "French Imperial", "Joseon", "Meiji Japanese", "Mexican", "Mughal", "Nepalese", "Ottoman", "Prussian", "Qajar", "Qing", "Russian", "Siamese"
 ]
 
+# Estados de relación con un rival - valores EXACTOS que usa el modal de
+# Configuración de Rivales (orden del más positivo al más negativo).
+const ESTADOS_RELACION = ["Alianza", "Gran Relación", "Buena relación", "Neutro", "Mala Relación", "Furioso", "Guerra"]
+
+# Colores de identificación rápida de la relación con cada rival. El texto del
+# selector se tiñe en negro o blanco según la luminancia del color para que
+# siempre sea legible (la Guerra es negro -> texto blanco, etc.).
+const COLORES_RELACION = {
+	"Alianza": Color(0.16, 0.65, 0.30),
+	"Gran Relación": Color(0.55, 0.85, 0.50),
+	"Buena relación": Color(0.95, 0.85, 0.25),
+	"Neutro": Color(0.25, 0.50, 0.95),
+	"Mala Relación": Color(0.95, 0.55, 0.18),
+	"Furioso": Color(0.55, 0.35, 0.18),
+	"Guerra": Color(0.03, 0.03, 0.03),
+}
+
 # ------------------------------------------------------------------------------
 # BIOMAS, TERRENOS Y CARACTERISTICAS
 # ------------------------------------------------------------------------------
@@ -436,6 +453,280 @@ const DATOS_LIDERES = {
 	"Xerxes King of Kings": {"bonos": ["gold_boost_settlements"]},
 	"Himiko High Shaman": {"bonos": ["happiness_on_dip_bldgs", "culture_science_modifier"]},
 	"Xerxes the Achaemenid": {"bonos": ["yields_on_uniques"]}
+}
+
+# ------------------------------------------------------------------------------
+# ESPECIALISTAS (mecánica Civ VII)
+# ------------------------------------------------------------------------------
+# Cada celda urbana puede alojar especialistas que potencian la adyacencia de
+# sus edificios. Main.gd guarda por celda:
+#   especialistas_asignados (int, empieza en 0)
+#   limite_especialistas    (int, 0 en los pueblos y en las celdas sin edificios
+#                            reales; 1 por edificio real y +1 de distrito; ni
+#                            murallas ni maravillas aportan cupo)
+const ESPECIALISTAS_ALIMENTO_MANTENIMIENTO := -2
+const ESPECIALISTAS_FELICIDAD_BASE := 0
+const ESPECIALISTAS_BONO_ADYACENCIA := 0.5
+
+# Reglas de colocación (Civ VII): un especialista solo puede situarse en una
+# celda URBANA del propio asentamiento (un edificio externo no cuenta) que ya
+# tenga AL MENOS UN edificio —el Palace y el Town Hall cuentan como edificio—,
+# y únicamente en Ciudades y Capitales. En los pueblos ("Town") no puede haber
+# especialistas. Solo ReglasJuego.limite_especialistas_celda() las interpreta.
+const ESPECIALISTAS_TIPOS_ASENTAMIENTO := ["Capital", "City"]
+
+# LETARGO DE ESPECIALISTAS (mecánica Civ VII): un especialista dormido no genera
+# rendimiento, ni adyacencia, ni recibe bonos de políticas; su mantenimiento pasa
+# a ser exactamente -1 Alimento y -1 Felicidad por especialista (sustituye al
+# coste normal de -2 Alimento y a los costes de políticas). Condiciones y
+# reactivación automática: ReglasJuego.especialistas_en_letargo_celda().
+const ESPECIALISTAS_LETARGO_ALIMENTO := -1
+const ESPECIALISTAS_LETARGO_FELICIDAD := -1
+
+# Ningún edificio en particular desbloquea especialistas ni les aporta cupo
+# "propio": la regla es por CONTEO en la celda (1 cupo por edificio real, sin
+# murallas ni maravillas; +1 de distrito). La interpreta y aplica únicamente
+# ReglasJuego.limite_especialistas_celda().
+
+# ------------------------------------------------------------------------------
+# SEPARACIÓN DE PANELES: UI DE LA CELDA vs PANEL DE CONSTRUCCIÓN
+# ------------------------------------------------------------------------------
+# Nombres de nodo de la UI que deben ser ÚNICOS de su panel (los usa Main.gd):
+# la fila de especialistas se pinta SOLO en el panel de información de la celda,
+# justo debajo de su caja de rendimientos. El panel de construcción la retira si
+# alguna vez apareciera ahí (blindaje en GestorConstruccion y
+# ReglasJuego.es_construible): los especialistas NO son elementos construibles.
+const NODO_CAJA_RENDIMIENTOS_CELDA := "CajaRendimientosCelda"
+const NODO_FILA_ESPECIALISTAS := "FilaEspecialistas"
+
+# Pseudo-elementos de CELDA que NUNCA son construibles. Se comparan en
+# minúsculas (sin distinguir mayúsculas) desde ReglasJuego.es_construible(), que
+# es el filtro que usan el panel de construcción y el aconsejador de
+# rendimientos antes de pintar o recomendar cada elemento.
+const ELEMENTOS_NO_CONSTRUIBLES := ["especialista", "especialistas", "specialist", "specialists"]
+
+# Edificios de cultura y de ciencia (Drama and Poetry / Literature).
+# Se usa "tipo" cuando existe; como respaldo se listan nombres por rendimiento.
+const EDIFICIOS_CULTURA := [
+	"Hawilt", "Jinja", "Pairidaeza", "Poktop", "Festival Grounds", "Megalith",
+	"Odeon", "Mastaba", "Monument", "Temple", "Cathedral", "Amphitheater",
+	"Arena", "Theater", "Tea House", "Gama", "Kasbah", "Water Puppet Theater",
+	"Stone Head", "Museum", "Open-Air Museum", "Opera House",
+]
+const EDIFICIOS_CIENCIA := [
+	"Step Pyramid", "Royal Library", "Library", "Academy", "Observatory",
+	"University", "Schoolhouse", "Laboratory", "Institute", "Monastery",
+]
+
+# ------------------------------------------------------------------------------
+# MEMENTOS: DATOS Y LÍMITES DE SELECCIÓN
+# ------------------------------------------------------------------------------
+# Único origen de verdad de los mementos (antes en DatosMementos.gd). Cada
+# memento es un diccionario con:
+#   - descripcion : efecto del memento (texto del diseño original)
+#   - era         : "Antiquity" / "Exploration" / "Modern Age" (o "Todas"): la
+#                   Era a la que pertenece. El modal SOLO muestra los mementos
+#                   de la Era actual del jugador.
+# El jugador activa como máximo MEMENTOS_MAXIMO_POR_ERA mementos por Era y son
+# sustituibles. Las reglas de selección viven en Main.gd -> GestorMementos.
+const MEMENTOS_MAXIMO_POR_ERA := 2
+
+const DATOS_MEMENTOS := {
+	"The Iliad": {"descripcion": "+1 cultura y +1 produccion por Era en Maravillas en Ciudades distintas a tu capital.", "era": "Antiquity"},
+	"Silk Uttariya": {"descripcion": "+2 produccion por era en ciudades con felicidad positiva.", "era": "Antiquity"},
+	"Chakra": {"descripcion": "+1 comida en la capital por cada 5 de felicidad.", "era": "Antiquity"},
+	"Breastplate": {"descripcion": "+2 comida por era en pueblos.", "era": "Exploration"},
+	"clipeus virtutis": {"descripcion": "+1 prod en capital por cada pueblo creado.", "era": "Antiquity"},
+	"Great Imperial Crown": {"descripcion": "+2 science por era por cada pueblo en el que su ayuntamiento esta sobre bioma tundra", "era": "Modern Age"},
+	"altar set": {"descripcion": "+1 culture en la celda urbana donde hay especialistas por cada especialista", "era": "Antiquity"},
+	"the analects": {"descripcion": "+1 science en la celda urbana donde hay especialistas por cada especialista", "era": "Antiquity"},
+	"flute": {"descripcion": "+1 culture por era en cada military building", "era": "Antiquity"},
+	"walking stick": {"descripcion": "+1 science pro era en cada military building", "era": "Modern Age"},
+	"constitution": {"descripcion": "+1 influence en cada ciudad por cada tradición activa", "era": "Modern Age"},
+	"bastille key": {"descripcion": "+1 food y +1 happiness en cada ciudad por cada tradición activa", "era": "Modern Age"},
+	"false beard": {"descripcion": "+2 culture en wonders (maravillas construibles)", "era": "Antiquity"},
+	"uraeus": {"descripcion": "+10 culture por era en cada ciudad que tenga al menos 1 maravilla construible", "era": "Antiquity"},
+	"kusanagi_no_tsurugi": {"descripcion": "+3 culture por era on happiness builiding and -1 science por era en happiness building", "era": "Exploration"},
+	"golden seal stone": {"descripcion": "+1 influence por era en science building", "era": "Antiquity"},
+	"queens jewelry": {"descripcion": "+2 gold por era en cada maravilla natural", "era": "Modern Age"},
+	"padrón real": {"descripcion": "+2 happiness en cada maravilla natural", "era": "Exploration"},
+	"letter to adrienne": {"descripcion": "+2 happiness por era por cada política social activa", "era": "Modern Age"},
+	"tricolor_cockade": {"descripcion": "+2 culture y +2 happiness por era en la capital por cada tradición activa", "era": "Modern Age"},
+	"baadals reins": {"descripcion": "+1 influence por cada improvement pasture", "era": "Exploration"},
+	"topayauri": {"descripcion": "+1 food por era en barrios adyacentes a montañas", "era": "Exploration"},
+	"mascapaycha": {"descripcion": "+1 gold en especialistas, +1 gold adicional en especialistas en celdas adyacentes a montañas", "era": "Exploration"},
+	"davalos medal": {"descripcion": "+1 happiness por era en cada military building", "era": "Exploration"},
+	"kabuto": {"descripcion": "+3 influence por era", "era": "Exploration"},
+	"golden sceptre": {"descripcion": "+3 gold por era por cada asentamiento que conquistas", "era": "Modern Age"},
+	"incense censer": {"descripcion": "+2 culture por era por cada ruta de comercio activa", "era": "Exploration"},
+	"chalcedony seal": {"descripcion": "+1 culture y +1 gold por cada edificio único y mejora única", "era": "Antiquity"},
+}
+
+# Lista ordenada de eras en las que se puede seleccionar (pestañas del modal).
+const MEMENTOS_ERAS_SELECCION := ["Antiquity", "Exploration", "Modern Age"]
+
+# ------------------------------------------------------------------------------
+# POLÍTICAS Y TRADICIONES: DATOS Y LÍMITES DE SELECCIÓN
+# ------------------------------------------------------------------------------
+# Único origen de verdad de las políticas y tradiciones (antes en
+# DatosPoliticas.gd). Estructura anidada por Era -> Tipo -> lista:
+#   DATOS_POLITICAS[era][tipo] = [ {"nombre": ..., "requisito": ..., "efecto": ...}, ... ]
+#     Eras  : "Antiquity", "Exploration", "Modern Age"
+#     Tipos : "Social", "Crisis", "Ideology", "Tradiciones"
+# Las políticas de Ideología llevan además el campo "ideologia" ("Democracy",
+# "Fascism", "Communism"). "Crisis" queda como lista vacía preparada para el
+# listado completo siguiendo el mismo patrón.
+# LÍMITES DE SELECCIÓN POR ERA (valor por DEFECTO; los botones "+" del modal los
+# amplían durante la partida en main.tope_politicas / main.tope_tradiciones):
+#   * MAXIMO_POLITICAS_POR_ERA   : contador TOTAL de políticas; INCLUYE las
+#     tradiciones activas (total = políticas + tradiciones).
+#   * MAXIMO_TRADICIONES_POR_ERA : contador EXCLUSIVO de tradiciones.
+# Las reglas de selección y de tradiciones heredadas viven en Main.gd ->
+# GestorPoliticas.
+const MAXIMO_POLITICAS_POR_ERA := 5
+const MAXIMO_TRADICIONES_POR_ERA := 3
+
+const DATOS_POLITICAS := {
+	"Antiquity": {
+		"Social": [
+			{"nombre": "Charismatic Leader", "requisito": "Chiefdom", "efecto": "+2 Culture on the Palace"},
+			{"nombre": "Castes", "requisito": "Citizenship", "efecto": "+2 Food in Settlements"},
+			{"nombre": "City Guard", "requisito": "Public Life", "efecto": "+3 Combat Strength for Fortified Districts"},
+			{"nombre": "Clan Networks", "requisito": "Mysticism II", "efecto": "+20% Growth Rate in Towns with a Growing Focus"},
+			{"nombre": "Coinage", "requisito": "Skilled Trades", "efecto": "+1 Gold for each imported Resource, +1 Movement for Merchants"},
+			{"nombre": "Commodities", "requisito": "Commerce", "efecto": "+1 Resource cap in Cities"},
+			{"nombre": "Conscription", "requisito": "Organized Military", "efecto": "-1 Gold maintenance for Units"},
+			{"nombre": "Drama and Poetry", "requisito": "Citizenship", "efecto": "+2 Culture on Culture Buildings, +20% Production towards Culture Buildings"},
+			{"nombre": "Drills", "requisito": "Tactics", "efecto": "+30% Production towards training Infantry and Ranged Units"},
+			{"nombre": "Ethics", "requisito": "Code of Laws II", "efecto": "+1 Culture from Specialists, +1 Happiness maintenance for Specialists"},
+			{"nombre": "Honor", "requisito": "Discipline II", "efecto": "+3 Combat Strength against Independent Powers"},
+			{"nombre": "Hospitality", "requisito": "Citizenship II", "efecto": "+3 Culture for every City-State you are suzerain of"},
+			{"nombre": "Literature", "requisito": "Literacy", "efecto": "+2 Science on Science Buildings, +20% Production towards Science Buildings"},
+			{"nombre": "Medicine", "requisito": "Commerce", "efecto": "Units Heal +5 HP"},
+			{"nombre": "Oratory", "requisito": "Code of Laws", "efecto": "+2 Influence per turn"},
+			{"nombre": "Priesthood", "requisito": "Mysticism", "efecto": "+2 Gold in all Settlements"},
+			{"nombre": "Rites and Rituals", "requisito": "Entertainment", "efecto": "+2 Happiness in all Settlements"},
+			{"nombre": "Scholars", "requisito": "Philosophy", "efecto": "+1 Science from Specialists, +1 Happiness maintenance for Specialists"},
+			{"nombre": "Survey", "requisito": "Discipline", "efecto": "+1 Scout Movement and Sight"},
+			{"nombre": "Tool Making", "requisito": "Chiefdom", "efecto": "+1 Production and +1 Science on the Palace"}
+		],
+		"Crisis": [],
+		"Ideology": [],
+		"Tradiciones": [
+			{"nombre": "Oral Tradition", "requisito": "", "efecto": "+1 Culture per turn in Cities"},
+			{"nombre": "Ancestor Worship", "requisito": "", "efecto": "+2 Happiness in all Settlements"},
+			{"nombre": "Sacred Kingship", "requisito": "", "efecto": "+1 Production on the Palace"},
+			{"nombre": "Heroic Legends", "requisito": "", "efecto": "+2 Combat Strength against Independent Powers"},
+			{"nombre": "Clan Feuds", "requisito": "", "efecto": "+1 Gold in all Towns"},
+			{"nombre": "Trial by Combat", "requisito": "", "efecto": "+2 Combat Strength for fortified Units"}
+		]
+	},
+	"Exploration": {
+		"Social": [
+			{"nombre": "Castes", "requisito": "", "efecto": "+2 Food in Settlements"},
+			{"nombre": "Conscription", "requisito": "", "efecto": "-1 Gold maintenance for Units"},
+			{"nombre": "Oratory", "requisito": "", "efecto": "+2 Influence per turn"},
+			{"nombre": "Priesthood", "requisito": "", "efecto": "+2 Gold in all Settlements"},
+			{"nombre": "Rites and Rituals", "requisito": "", "efecto": "+2 Happiness in all Settlements"},
+			{"nombre": "Survey", "requisito": "", "efecto": "+1 Scout Movement and Sight"},
+			{"nombre": "Bourgeoisie", "requisito": "Social Class II", "efecto": "+4 Culture and +4 Gold in homeland Cities"},
+			{"nombre": "Charters", "requisito": "Colonialism", "efecto": "+2 Gold from Specialists, +1 Happiness maintenance for Specialists"},
+			{"nombre": "Chivalry", "requisito": "Social Class", "efecto": "+30% Production towards training Cavalry Units"},
+			{"nombre": "Colonial Surplus", "requisito": "Colonialism", "efecto": "+2 Production from Specialists, +1 Food maintenance for Specialists"},
+			{"nombre": "Commune", "requisito": "Piety", "efecto": "+20% Production towards overbuilding, +3 Combat Strength for Fortified Districts"},
+			{"nombre": "Commissioned Officers", "requisito": "Imperialism II", "efecto": "+30% Commander experience, +1 Movement for fleets and armies"},
+			{"nombre": "Constitution", "requisito": "Bureaucracy", "efecto": "+25% Food and +25% Happiness towards maintaining Specialists"},
+			{"nombre": "De Facto", "requisito": "Sovereignty II", "efecto": "+3 Combat Strength for all Units in distant lands, Units Heal +5 HP"},
+			{"nombre": "De Jure", "requisito": "Sovereignty II", "efecto": "+3 Combat Strength for all Units in homelands"},
+			{"nombre": "Divine Right", "requisito": "Sovereignty", "efecto": "+10 Happiness and +4 Influence on the Palace"},
+			{"nombre": "Enlightenment", "requisito": "Social Class", "efecto": "+2 Science from Specialists, +1 Happiness maintenance for Specialists"},
+			{"nombre": "Evangelism", "requisito": "Theology", "efecto": "+1 Civilian Movement, +1 Missionary charge"},
+			{"nombre": "Heqin", "requisito": "Diplomatic Service", "efecto": "+5 Culture per Alliance"},
+			{"nombre": "Indenture", "requisito": "Imperialism", "efecto": "+2 Food from Specialists, +1 Happiness maintenance for Specialists"},
+			{"nombre": "Levies", "requisito": "Authority II", "efecto": "+25% Gold towards purchasing Military Units, -1 Gold maintenance for Units"},
+			{"nombre": "Maritime Law", "requisito": "Economics", "efecto": "+30% Production towards training Naval Units"},
+			{"nombre": "Metropole", "requisito": "Imperialism II", "efecto": "+1 Resource Capacity in homeland Cities, +10 Trade Range"},
+			{"nombre": "Patronage", "requisito": "Society", "efecto": "+2 Culture from Specialists, +1 Happiness maintenance for Specialists"},
+			{"nombre": "Rationalism", "requisito": "Reformation", "efecto": "+15% Gold and +15% Science in your own Cities that are converted to your own Religion"},
+			{"nombre": "Regulars", "requisito": "Sovereignty", "efecto": "+30% Production towards training Infantry and Ranged Units"},
+			{"nombre": "Religious Orders", "requisito": "Reformation", "efecto": "+15% Culture and +15% Happiness in your own Cities that are converted to your own Religion"},
+			{"nombre": "Renaissance", "requisito": "Inspiration", "efecto": "+10% Production towards constructing Wonders, +2 Culture on displayed Great Works"},
+			{"nombre": "Tariffs", "requisito": "Imperialism", "efecto": "+50% Trade income, but -3 Happiness in Cities"},
+			{"nombre": "Trade Winds", "requisito": "Mercantilism", "efecto": "+1 Gold and +1 Happiness for every imported Resource, +1 Movement on Merchants"},
+			{"nombre": "Uposatha", "requisito": "Society", "efecto": "+2 Happiness from Specialists, +1 Food maintenance for Specialists"},
+			{"nombre": "Vassalage", "requisito": "Authority", "efecto": "+3 Culture and +3 Gold for every City-State you are suzerain of"},
+			{"nombre": "Yeomanry", "requisito": "Social Class II", "efecto": "+4 Food and +4 Production in distant land Towns"}
+		],
+		"Crisis": [],
+		"Ideology": [],
+		"Tradiciones": [
+			{"nombre": "Seafaring Lore", "requisito": "", "efecto": "+1 Movement for Naval Units"},
+			{"nombre": "Merchant Guilds", "requisito": "", "efecto": "+1 Gold for each active Trade Route"},
+			{"nombre": "Courtly Etiquette", "requisito": "", "efecto": "+2 Influence per turn"},
+			{"nombre": "Colonial Charters", "requisito": "", "efecto": "+2 Production in distant land Settlements"},
+			{"nombre": "Cartographers", "requisito": "", "efecto": "+1 Sight and +1 Movement for Scouts"},
+			{"nombre": "Treasure Myths", "requisito": "", "efecto": "+2 Gold from Treasure resources"}
+		]
+	},
+	"Modern Age": {
+		"Social": [
+			{"nombre": "Bourgeoisie", "requisito": "", "efecto": "+4 Culture and +4 Gold in homeland Cities"},
+			{"nombre": "Commune", "requisito": "", "efecto": "+20% Production towards overbuilding, +3 Combat Strength for Fortified Districts"},
+			{"nombre": "Constitution", "requisito": "", "efecto": "+25% Food and +25% Happiness towards maintaining Specialists"},
+			{"nombre": "Divine Right", "requisito": "", "efecto": "+10 Happiness and +4 Influence on the Palace"},
+			{"nombre": "Levies", "requisito": "", "efecto": "+25% Gold towards purchasing Military Units, -1 Gold maintenance for Units"},
+			{"nombre": "Metropole", "requisito": "", "efecto": "+1 Resource Capacity in homeland Cities, +10 Trade Range"},
+			{"nombre": "Yeomanry", "requisito": "", "efecto": "+4 Food and +4 Production in distant land Towns"},
+			{"nombre": "Ambassadors", "requisito": "Globalism", "efecto": "+6 Influence per turn"},
+			{"nombre": "Civil Engineering", "requisito": "Modernity", "efecto": "+30% Production towards overbuilding"},
+			{"nombre": "Cultural Imperialism", "requisito": "Hegemony", "efecto": "+6 Culture and +6 Gold for every City-State you are suzerain of"},
+			{"nombre": "Demagogy", "requisito": "Nationalism", "efecto": "Gain Happiness on the Palace equal to your Cultural Attribute"},
+			{"nombre": "Draft", "requisito": "Militarism II", "efecto": "+25% Gold towards purchasing Units and -1 Gold maintenance for Units"},
+			{"nombre": "Free Speech", "requisito": "Political Theory", "efecto": "+50% Food and +50% Happiness towards maintaining Specialists"},
+			{"nombre": "Humanism", "requisito": "Social Question", "efecto": "+3 Culture from Specialists, +1 Food and Happiness maintenance for Specialists"},
+			{"nombre": "Laissez-Faire", "requisito": "Capitalism", "efecto": "+2 Gold and +1 Happiness for each imported Resource"},
+			{"nombre": "Land Heritage", "requisito": "Natural History", "efecto": "+2 Happiness on Mountains, +6 Culture on Natural Wonders"},
+			{"nombre": "Living Standards", "requisito": "Modernity", "efecto": "+25% Gold and +25% Happiness towards maintaining Buildings"},
+			{"nombre": "Materiel", "requisito": "Militarism", "efecto": "Units Heal +10 HP, +1 Movement for fleets and armies"},
+			{"nombre": "Monopolies", "requisito": "Capitalism II", "efecto": "+5 Gold and +1 Resource Capacity in every Settlement with a Factory"},
+			{"nombre": "People's Army", "requisito": "Nationalism II", "efecto": "+25% Production towards training Land Units, but +1 Gold maintenance for those Units"},
+			{"nombre": "Preservation Societies", "requisito": "Globalism II", "efecto": "+3 Science from displayed Great Works"},
+			{"nombre": "Projection of Force", "requisito": "Militarism II", "efecto": "+50% Production towards training Naval Units, but +1 Gold maintenance for those Units"},
+			{"nombre": "Social Science", "requisito": "Social Question", "efecto": "+3 Science from Specialists, +1 Food and Happiness maintenance for Specialists"},
+			{"nombre": "Sphere of Influence", "requisito": "Hegemony II", "efecto": "Gain Culture equal to your Diplomatic Attribute for every Alliance you have"},
+			{"nombre": "Trenchworks", "requisito": "Militarism", "efecto": "+3 Combat Strength for fortified Units and Districts"}
+		],
+		"Crisis": [],
+		"Ideology": [
+			{"nombre": "Avant Garde", "requisito": "Progressivism", "efecto": "+2 Culture and Happiness from displayed Great Works", "ideologia": "Democracy"},
+			{"nombre": "Fireside Chats", "requisito": "Democracy", "efecto": "+4 Happiness from Specialists, -3 Gold in Towns", "ideologia": "Democracy"},
+			{"nombre": "Free Press", "requisito": "Liberalism", "efecto": "Towns get Culture equal to your Cultural Attribute, -5 Science in Cities", "ideologia": "Democracy"},
+			{"nombre": "New Deal", "requisito": "Progressivism", "efecto": "+30% Production towards Wonders", "ideologia": "Democracy"},
+			{"nombre": "Suffrage", "requisito": "Democracy", "efecto": "+3 Culture from Specialists, -3 Production in Towns", "ideologia": "Democracy"},
+			{"nombre": "Their Finest Hour", "requisito": "Progressivism", "efecto": "+25% Production towards Air Units, +5 Combat Strength for Air Units in your territory", "ideologia": "Democracy"},
+			{"nombre": "Welfare State", "requisito": "Liberalism", "efecto": "Towns get Happiness equal to your Diplomatic Attribute, -5 Production in Cities", "ideologia": "Democracy"},
+			{"nombre": "Assembly Line", "requisito": "Fascism", "efecto": "+2 Production from Specialists, -2 Food in Towns", "ideologia": "Fascism"},
+			{"nombre": "Dirigisme", "requisito": "Fascism", "efecto": "+4 Gold from Specialists, -3 Happiness in Towns", "ideologia": "Fascism"},
+			{"nombre": "Military-Industrial Complex", "requisito": "Absolutism", "efecto": "+50% Production towards training all Military Units, but +1 Gold maintenance for all Units", "ideologia": "Fascism"},
+			{"nombre": "Propaganda", "requisito": "Radicalism", "efecto": "Towns gain Gold equal to your Economic Attribute, -5 Culture in Cities", "ideologia": "Fascism"},
+			{"nombre": "Scorched Earth", "requisito": "Absolutism", "efecto": "+3 Combat Strength for all Units when attacking, +25% yields and HP from pillaging", "ideologia": "Fascism"},
+			{"nombre": "Collectivization", "requisito": "Centralism", "efecto": "Towns gain Food equal to your Expansionist Attribute, -5 Happiness in Cities", "ideologia": "Communism"},
+			{"nombre": "Defense of the Motherland", "requisito": "Socialism", "efecto": "+3 Combat Strength for all Land Units in your own territory", "ideologia": "Communism"},
+			{"nombre": "Naukograd", "requisito": "Centralism", "efecto": "Towns gain Science equal to your Scientific Attribute, -5 Culture in Cities", "ideologia": "Communism"},
+			{"nombre": "Police State", "requisito": "Socialism", "efecto": "+8 Happiness in Cities while at War", "ideologia": "Communism"},
+			{"nombre": "Productive Forces Determinism", "requisito": "Communism", "efecto": "+3 Science from Specialists, -3 Gold in Towns", "ideologia": "Communism"},
+			{"nombre": "Proletariat", "requisito": "Communism", "efecto": "+4 Food from Specialists, -3 Happiness in Towns", "ideologia": "Communism"},
+			{"nombre": "Public Works", "requisito": "Socialism", "efecto": "+30% Production towards completing Projects", "ideologia": "Communism"}
+		],
+		"Tradiciones": [
+			{"nombre": "National Identity", "requisito": "", "efecto": "+2 Culture in Cities"},
+			{"nombre": "Industrial Spirit", "requisito": "", "efecto": "+2 Production in Cities"},
+			{"nombre": "Rule of Law", "requisito": "", "efecto": "+2 Happiness in Cities"},
+			{"nombre": "Mass Education", "requisito": "", "efecto": "+2 Science in Cities"},
+			{"nombre": "Civic Duty", "requisito": "", "efecto": "+1 Influence per turn"},
+			{"nombre": "Scientific Method", "requisito": "", "efecto": "+2 Science from Specialists"}
+		]
+	},
 }
 
 # ------------------------------------------------------------------------------
